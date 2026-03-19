@@ -57,7 +57,7 @@ class RenderFormer(nn.Module, PyTorchModelHubMixin):
             elif self.config.vn_encoder_norm_type == 'none':
                 self.vn_encoder_norm = nn.Identity()
             else:
-                raise ValueError(f"Invalid vertex normal encoder normalization type: {self.config.vn_encoder_norm_type}")
+                raise ValueError(f"Invalid vertex normal normalization type: {self.config.vn_encoder_norm_type}")
 
         # texture encoder
         self.texture_encoder = nn.Linear(
@@ -76,7 +76,7 @@ class RenderFormer(nn.Module, PyTorchModelHubMixin):
         self.reg_tokens = nn.Parameter(torch.randn(1, self.config.num_register_tokens, self.config.latent_dim))
         self.skip_token_num = self.config.num_register_tokens
 
-        # core radiosity transformer
+        # core radiosity transformer（视图无关：仅依赖场景三角+材质）
         self.transformer = TransformerEncoder(
             num_layers=self.config.num_layers,
             num_heads=self.config.num_heads,
@@ -93,7 +93,7 @@ class RenderFormer(nn.Module, PyTorchModelHubMixin):
             rope_double_max_freq=self.config.rope_double_max_freq
         )
 
-        # view transformer
+        # view transformer（视图相关：射线 + 相机系三角位置）
         self.view_transformer = ViewTransformer(config)
 
     @property
@@ -168,39 +168,130 @@ class RenderFormer(nn.Module, PyTorchModelHubMixin):
 
         return seq, valid_mask, tri_vpos_list
 
-    def forward(self, tri_vpos_list, texture_patch_list, valid_mask, vns, rays_o, rays_d, tri_vpos_view_tf, tf32_view_tf=False):
+    def encode_view_independent(
+        self,
+        tri_vpos_list: torch.Tensor,
+        texture_patch_list: torch.Tensor,
+        valid_mask: torch.Tensor,
+        vns: torch.Tensor,
+    ):
         """
-        Forward pass of the transformer.
+        视图无关阶段：三角序列编码 + 12 层 Transformer。
 
-        tri_vpos_list: [batch_size, max_num_tri, 9], padded
-        texture_patch_list: [batch_size, max_num_tri, texture_channel, patch_size, patch_size], padded
-        valid_mask: [batch_size, max_num_tri], things you want is True
-        vns: [batch_size, max_num_tri, 9], padded
+        为何单独抽出：
+        - 该段输出仅由场景几何/材质决定，与相机无关，可跨帧/跨视角缓存；
+        - 与 decode_view_dependent 拼接后与原始 forward 数学等价。
 
-        rays_o: [batch_size, num_views, 3]
-        rays_d: [batch_size, num_views, img_h, img_w, 3]
-        tri_vpos_view_tf: [batch_size, num_views, max_num_tri, 9], padded
-        tf32_view_tf: bool, whether to use tf32 for view transformer
+        Returns:
+            seq_vi: [B, L, latent_dim]，L = num_register_tokens + num_tris
+            valid_mask_padded: [B, L]，与 seq_vi 对齐的 padding mask（True=有效）
         """
-        seq, valid_mask_padded, tri_vpos_list = self.construct_seq(tri_vpos_list, texture_patch_list, valid_mask, vns)
-        seq = self.transformer(seq, src_key_padding_mask=valid_mask_padded, triangle_pos=tri_vpos_list)
+        seq, valid_mask_padded, tri_vpos_for_rope = self.construct_seq(
+            tri_vpos_list, texture_patch_list, valid_mask, vns
+        )
+        seq_vi = self.transformer(
+            seq,
+            src_key_padding_mask=valid_mask_padded,
+            triangle_pos=tri_vpos_for_rope,
+        )
+        return seq_vi, valid_mask_padded
 
+    def decode_view_dependent(
+        self,
+        seq_vi: torch.Tensor,
+        valid_mask_padded: torch.Tensor,
+        rays_o: torch.Tensor,
+        rays_d: torch.Tensor,
+        tri_vpos_view_tf: torch.Tensor,
+        valid_mask: torch.Tensor,
+        tf32_view_tf: bool = False,
+    ) -> torch.Tensor:
+        """
+        视图相关阶段：按视角复制 VI token，用相机系三角位置做 RoPE，再 ViewTransformer。
+
+        为何不能缓存：
+        - rays_o/rays_d、tri_vpos_view_tf 随相机变化，每帧必须重算。
+
+        Args:
+            seq_vi: VI 输出 [B, L, D]（未按视角展开）
+            valid_mask_padded: [B, L]
+            rays_o: [B, num_views, 3]
+            rays_d: [B, num_views, H, W, 3]
+            tri_vpos_view_tf: [B, num_views, num_tris, 9]
+            valid_mask: 原始三角有效掩码 [B, num_tris]（未含 register）
+            tf32_view_tf: 低精度推理时 ViewTransformer 使用 tf32 路径
+
+        Returns:
+            [B, num_views, C, H, W]
+        """
         batch_size, num_views = rays_o.size(0), rays_o.size(1)
-        seq = seq.repeat_interleave(num_views, dim=0)
+        # 多视角共享同一份 VI 特征：在 batch 维上按视角重复
+        seq = seq_vi.repeat_interleave(num_views, dim=0)
         rays_o = rays_o.view(-1, *rays_o.shape[2:])
         rays_d = rays_d.view(-1, *rays_d.shape[2:])
         tri_vpos_view_tf = tri_vpos_view_tf.reshape(-1, *tri_vpos_view_tf.shape[2:])
-        valid_mask = valid_mask.repeat_interleave(num_views, dim=0)
-        valid_mask_padded = valid_mask_padded.repeat_interleave(num_views, dim=0)
-        pos_seq, _ = self.process_tri_vpos_list(tri_vpos_view_tf, valid_mask)
+        valid_mask_expanded = valid_mask.repeat_interleave(num_views, dim=0)
+        valid_mask_padded_expanded = valid_mask_padded.repeat_interleave(num_views, dim=0)
+        pos_seq, _ = self.process_tri_vpos_list(tri_vpos_view_tf, valid_mask_expanded)
 
         res = self.view_transformer(
             rays_o,
             rays_d,
             seq,
             pos_seq,
-            valid_mask_padded,
-            tf32_mode=tf32_view_tf
+            valid_mask_padded_expanded,
+            tf32_mode=tf32_view_tf,
         )
-        res = res.view(batch_size, num_views, *res.size()[1:])  # [batch_size * num_views, ...] -> [batch_size, num_views, ...]
+        res = res.view(batch_size, num_views, *res.size()[1:])
         return res
+
+    def forward(
+        self,
+        tri_vpos_list,
+        texture_patch_list,
+        valid_mask,
+        vns,
+        rays_o,
+        rays_d,
+        tri_vpos_view_tf,
+        tf32_view_tf=False,
+        cached_seq_vi=None,
+        cached_valid_mask_padded=None,
+    ):
+        """
+        完整前向；若提供 cached_seq_vi 则跳过 VI，仅执行 VD（用于缓存命中）。
+
+        Args:
+            cached_seq_vi / cached_valid_mask_padded:
+                必须同时提供或同时为 None。命中时无需再传几何纹理给 VI（仍建议
+                由上层传齐以保持 API 兼容；VI 路径下这些参数仍用于未缓存分支）。
+
+        原因：
+        - 默认路径与旧版完全一致，保证预训练权重行为不变；
+        - 缓存路径避免重复执行 construct_seq + transformer。
+        """
+        if cached_seq_vi is not None:
+            if cached_valid_mask_padded is None:
+                raise ValueError("cached_valid_mask_padded is required when cached_seq_vi is set")
+            return self.decode_view_dependent(
+                cached_seq_vi,
+                cached_valid_mask_padded,
+                rays_o,
+                rays_d,
+                tri_vpos_view_tf,
+                valid_mask,
+                tf32_view_tf=tf32_view_tf,
+            )
+
+        seq_vi, valid_mask_padded = self.encode_view_independent(
+            tri_vpos_list, texture_patch_list, valid_mask, vns
+        )
+        return self.decode_view_dependent(
+            seq_vi,
+            valid_mask_padded,
+            rays_o,
+            rays_d,
+            tri_vpos_view_tf,
+            valid_mask,
+            tf32_view_tf=tf32_view_tf,
+        )
