@@ -9,7 +9,9 @@
 python scene_processor/convert_scene.py examples/cbox.json --output_h5_path tmp/cbox/cbox.h5
 ```
 
-## 2. 运行带缓存的推理（推荐）
+视频序列可直接使用已有 H5 目录，例如：`video-data/teaser-scenes/cbox-roughness`。
+
+## 2. 单场景多次渲染（验证命中）
 
 使用脚本 `infer_with_cache.py`：对同一场景渲染多次，第二次起会命中块缓存并打印统计信息。
 
@@ -25,7 +27,26 @@ python infer_with_cache.py --h5_file tmp/cbox/cbox.h5 --output_dir output/cbox_c
 # --precision fp16       fp16 / bf16 / fp32
 ```
 
-## 3. 控制台输出说明
+## 3. 完整 H5 视频序列 + 缓存统计与汇总
+
+使用 `batch_infer_with_cache.py` 对整段 H5 目录逐帧渲染，**逐帧打印缓存数据**，结束时输出**命中汇总**。
+
+```bash
+# 示例：cbox-roughness 整段序列
+python batch_infer_with_cache.py --h5_folder video-data/teaser-scenes/cbox-roughness --output_dir output/videos/cbox-roughness-cache
+
+# 可选
+# --block_size 256         每块三角形数
+# --max_cache_entries 50000 缓存最大条目
+# --quiet                   少打逐行日志，只保留最后汇总
+# --save_video              是否合成 video.mp4（默认 True）
+```
+
+控制台会输出：
+- **逐帧**：帧号、文件名、三角形数、本帧块数、本帧 hit/miss、本帧命中率、当前缓存条数与占用。
+- **结尾汇总**：总帧数、总查询次数、总命中/未命中、整体命中率、缓存条目数、缓存占用；并提示首帧（预期全 miss）与末帧（同场景预期高命中）。
+
+## 4. 控制台输出说明（单场景 infer_with_cache）
 
 - **Run 1**：各块均为 cache miss，会执行块编码并写入缓存；打印 `hits=0 misses=<块数>`。
 - **Run 2**：各块命中缓存，只做查表与重组；打印 `hits=<块数> misses=0`，`hit_rate=100%`。
@@ -48,7 +69,7 @@ Rendering data: shape=torch.Size([1, 512, 512, 3]) ...
 ...
 ```
 
-## 4. 与无缓存推理对比
+## 5. 与无缓存推理对比
 
 无缓存单张图推理（官方脚本）：
 
