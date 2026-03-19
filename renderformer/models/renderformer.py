@@ -204,3 +204,41 @@ class RenderFormer(nn.Module, PyTorchModelHubMixin):
         )
         res = res.view(batch_size, num_views, *res.size()[1:])  # [batch_size * num_views, ...] -> [batch_size, num_views, ...]
         return res
+
+    def forward_from_sequence(
+        self,
+        seq: torch.Tensor,
+        valid_mask_padded: torch.Tensor,
+        tri_vpos_list: torch.Tensor,
+        rays_o: torch.Tensor,
+        rays_d: torch.Tensor,
+        tri_vpos_view_tf: torch.Tensor,
+        tf32_view_tf: bool = False,
+    ) -> torch.Tensor:
+        """
+        Run only transformer + view_transformer given pre-assembled seq (e.g. from block cache).
+        seq: [batch_size, num_tri + skip_token_num, latent_dim]
+        valid_mask_padded: [batch_size, num_tri + skip_token_num]
+        tri_vpos_list: [batch_size, num_tri + skip_token_num, 3, 3] (already with center pos prepended)
+        """
+        seq = self.transformer(seq, src_key_padding_mask=valid_mask_padded, triangle_pos=tri_vpos_list)
+
+        batch_size, num_views = rays_o.size(0), rays_o.size(1)
+        seq = seq.repeat_interleave(num_views, dim=0)
+        rays_o = rays_o.view(-1, *rays_o.shape[2:])
+        rays_d = rays_d.view(-1, *rays_d.shape[2:])
+        tri_vpos_view_tf = tri_vpos_view_tf.reshape(-1, *tri_vpos_view_tf.shape[2:])
+        valid_mask = valid_mask_padded[:, self.skip_token_num:].repeat_interleave(num_views, dim=0)
+        valid_mask_padded = valid_mask_padded.repeat_interleave(num_views, dim=0)
+        pos_seq, _ = self.process_tri_vpos_list(tri_vpos_view_tf, valid_mask)
+
+        res = self.view_transformer(
+            rays_o,
+            rays_d,
+            seq,
+            pos_seq,
+            valid_mask_padded,
+            tf32_mode=tf32_view_tf
+        )
+        res = res.view(batch_size, num_views, *res.size()[1:])
+        return res
