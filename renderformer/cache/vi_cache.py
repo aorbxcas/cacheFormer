@@ -105,3 +105,7 @@ class ViewIndependentCache:
             "hit_rate": hit_rate,
             "entries": len(self._store),
         }
+
+    def current_keys(self) -> list:
+        """当前缓存中的 key 列表（LRU 顺序，队首最久未用）。用于调试/打印。"""
+        return list(self._store.keys())
