@@ -168,6 +168,24 @@ class RenderFormer(nn.Module, PyTorchModelHubMixin):
 
         return seq, valid_mask, tri_vpos_list
 
+    @torch.no_grad()
+    def forward_vi_only(self, tri_vpos_list, texture_patch_list, valid_mask, vns):
+        """
+        View-independent radiosity transformer only (no view branch).
+
+        Returns:
+            torch.Tensor: [B, skip + N, latent_dim] after all VI (transformer) layers.
+        """
+        seq, valid_mask_padded, tri_vpos_padded = self.construct_seq(
+            tri_vpos_list, texture_patch_list, valid_mask, vns
+        )
+        seq = self.transformer(
+            seq,
+            src_key_padding_mask=valid_mask_padded,
+            triangle_pos=tri_vpos_padded,
+        )
+        return seq
+
     def forward(self, tri_vpos_list, texture_patch_list, valid_mask, vns, rays_o, rays_d, tri_vpos_view_tf, tf32_view_tf=False):
         """
         Forward pass of the transformer.

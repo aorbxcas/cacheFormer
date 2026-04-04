@@ -112,8 +112,21 @@ class MultiHeadAttention(nn.Module):
             self.q_norm = nn.Identity()
             self.k_norm = nn.Identity()
 
-    def forward(self, q, k, v, src_key_padding_mask=None, rope_cos=None, rope_sin=None, rope_ctx_cos=None, rope_ctx_sin=None, force_sdpa=False):
+    def forward(
+        self,
+        q,
+        k,
+        v,
+        src_key_padding_mask=None,
+        rope_cos=None,
+        rope_sin=None,
+        rope_ctx_cos=None,
+        rope_ctx_sin=None,
+        force_sdpa=False,
+        attn_bias_2d: Optional[torch.Tensor] = None,
+    ):
         # src_key_padding_mask: (B, N), key padding mask, things you want to attend to is True
+        # attn_bias_2d: optional float bias (src_len, ctx_len) added to attention logits; forces SDPA path
         bs, src_len = q.shape[0], q.shape[1]
         ctx_len = k.shape[1]
 
@@ -140,9 +153,27 @@ class MultiHeadAttention(nn.Module):
                 q = apply_rotary_emb_one_cossin(q, rope_cos, rope_sin)
                 k = apply_rotary_emb_one_cossin(k, rope_ctx_cos, rope_ctx_sin)
 
-        if ATTN == 'sdpa' or force_sdpa:
-            # create attention mask
-            if src_key_padding_mask is not None:
+        use_sdpa = ATTN == 'sdpa' or force_sdpa or attn_bias_2d is not None
+        if use_sdpa:
+            if attn_bias_2d is not None:
+                assert attn_bias_2d.shape == (src_len, ctx_len), (
+                    f"attn_bias_2d must be ({src_len}, {ctx_len}), got {tuple(attn_bias_2d.shape)}"
+                )
+                neg_large = torch.finfo(torch.float32).min / 4
+                attn_mask = torch.zeros(
+                    bs, self.num_heads, src_len, ctx_len, device=q.device, dtype=torch.float32
+                )
+                if src_key_padding_mask is not None:
+                    assert src_key_padding_mask.shape == (bs, ctx_len), (
+                        f"expecting key_padding_mask shape of {(bs, ctx_len)}, but got {src_key_padding_mask.shape}"
+                    )
+                    invalid = ~src_key_padding_mask
+                    attn_mask = attn_mask.masked_fill(
+                        invalid.view(bs, 1, 1, ctx_len), neg_large
+                    )
+                bias = attn_bias_2d.to(device=q.device, dtype=torch.float32).view(1, 1, src_len, ctx_len)
+                attn_mask = attn_mask + bias
+            elif src_key_padding_mask is not None:
                 assert src_key_padding_mask.shape == (bs, ctx_len), \
                     f"expecting key_padding_mask shape of {(bs, ctx_len)}, but got {src_key_padding_mask.shape}"
                 attn_mask = (
@@ -481,7 +512,20 @@ class AttentionLayer(nn.Module):
         
         self.ffn_norm = norm_module(query_dim, eps=EPS)
 
-    def forward(self, query, kv=None, src_key_padding_mask=None, rope_cos=None, rope_sin=None, rope_ctx_cos=None, rope_ctx_sin=None, force_sdpa=False, patch_h=None, patch_w=None):
+    def forward(
+        self,
+        query,
+        kv=None,
+        src_key_padding_mask=None,
+        rope_cos=None,
+        rope_sin=None,
+        rope_ctx_cos=None,
+        rope_ctx_sin=None,
+        force_sdpa=False,
+        patch_h=None,
+        patch_w=None,
+        attn_bias_2d: Optional[torch.Tensor] = None,
+    ):
         """
         Args:
             query (torch.Tensor): (B, N, query_dim)
@@ -509,7 +553,21 @@ class AttentionLayer(nn.Module):
             ctx_len = kv.shape[1]
 
         # multihead attention
-        attn_output = self.dropout(self.multihead_attn(q, kv, kv, src_key_padding_mask, rope_cos, rope_sin, rope_ctx_cos, rope_ctx_sin, force_sdpa=force_sdpa))
+        sdpa = force_sdpa or attn_bias_2d is not None
+        attn_output = self.dropout(
+            self.multihead_attn(
+                q,
+                kv,
+                kv,
+                src_key_padding_mask,
+                rope_cos,
+                rope_sin,
+                rope_ctx_cos,
+                rope_ctx_sin,
+                force_sdpa=sdpa,
+                attn_bias_2d=attn_bias_2d,
+            )
+        )
         query = query + attn_output
 
         if self.add_self_attn:
@@ -576,8 +634,17 @@ class TransformerEncoder(nn.Module):
                 double_max_freq=rope_double_max_freq,
             )
 
-    def forward(self, x, src_key_padding_mask=None, triangle_pos=None):
+    def forward(
+        self,
+        x,
+        src_key_padding_mask=None,
+        triangle_pos=None,
+        attn_bias_2d: Optional[torch.Tensor] = None,
+        force_sdpa: bool = False,
+    ):
         # src_key_padding_mask: (B, N), key padding mask, things you want to attend to is True
+        if attn_bias_2d is not None:
+            force_sdpa = True
         if self.rope_dim is not None:
             assert triangle_pos is not None, "triangle_pos must be provided if rope_dim is not None"
             rope_freqs = self.rope_emb.get_triangle_freqs(triangle_pos)
@@ -586,7 +653,14 @@ class TransformerEncoder(nn.Module):
             rope_cos = rope_sin = None
 
         for layer in self.layers:
-            x = layer(x, src_key_padding_mask=src_key_padding_mask, rope_cos=rope_cos, rope_sin=rope_sin)
+            x = layer(
+                x,
+                src_key_padding_mask=src_key_padding_mask,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                attn_bias_2d=attn_bias_2d,
+                force_sdpa=force_sdpa,
+            )
         return x
 
 
