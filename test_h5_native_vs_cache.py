@@ -1,12 +1,14 @@
 """
-连续帧：对 examples/cbox.h5（或指定 h5）做「全量 VI 参考渲染」vs「缓存近似 VI + 精炼」对比。
+同一 HDF5 场景：原生（全量 VI + 每视角 VD）与缓存近似路径对比。
 
-单相机 h5 时绕轨道生成多视角；多相机 h5 使用文件内视角——每帧相机变化，画面随之变化。
-VI 与几何不变，首帧缓存从 vi_gold 起，不做人工加噪；之后 vi_cache 为上一帧近似 VI 输出。
+- 原生：一次 forward_vi_only 得 vi_gold，再每帧 render_from_vi_seq(vi_gold, …)。静态几何下与 pipeline.render
+  多视角一次前向在数学上等价，但按视角拆分可显著降低峰值显存（避免多视角同时占满 VD）。
+- 缓存：同一 vi_gold 基准；每帧 approx_vi_local_window + render_from_vi_seq(vi_apx)；vi_cache 链式更新。
+- 输出：控制台表、CSV、native/ 与 cache/ 下的 EXR/PNG。
 
-本脚本将 renderformer.layers.attention.ATTN 设为 'sdpa'（与局部 2D mask 一致）。
+显存不足：降低 --res、减少 --frames，或设置环境变量 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True。
 
-输出：控制台 Markdown 风格表格、cache_compare_metrics.csv，以及每帧 ref/cache 的 .exr / .png。
+attention 在脚本内固定为 sdpa，无需 ATTN_IMPL。
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List
 
 import imageio
 import numpy as np
@@ -41,7 +43,6 @@ def look_at_to_c2w(
     target_position: list | None = None,
     up_dir: list | None = None,
 ) -> np.ndarray:
-    """与 scene_processor/to_h5.py 一致，用于合成轨道相机。"""
     if target_position is None:
         target_position = [0.0, 0.0, 0.0]
     if up_dir is None:
@@ -100,11 +101,6 @@ def build_frame_cameras(
     synthetic_frames: int,
     orbit_arc_deg: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    c2w: [V, 4, 4], fov: [V] or [V, 1]
-    若 V==1 且 synthetic_frames>1：绕 Z 轴旋转相机位置，保持 look_at=(0,0,0)、up=(0,0,1)。
-    否则：使用文件中全部 V 个视角（截断到 synthetic_frames 若需要）。
-    """
     V = c2w.shape[0]
     fov_np = fov.reshape(-1).cpu().numpy()
 
@@ -117,8 +113,8 @@ def build_frame_cameras(
         mats: list[np.ndarray] = []
         fovs: list[float] = []
         for i in range(synthetic_frames):
-            t = orbit_arc_deg * (np.pi / 180.0) * (i / max(synthetic_frames - 1, 1))
-            c, s = np.cos(t), np.sin(t)
+            ang = orbit_arc_deg * (np.pi / 180.0) * (i / max(synthetic_frames - 1, 1))
+            c, s = np.cos(ang), np.sin(ang)
             R = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
             pos_i = R @ pos.astype(np.float64)
             mats.append(look_at_to_c2w(pos_i.tolist(), look_at.tolist(), up.tolist()))
@@ -139,7 +135,7 @@ def rmse(a: torch.Tensor, b: torch.Tensor) -> float:
     return float(torch.sqrt(((a - b) ** 2).mean()).item())
 
 
-def psnr_hdr(mse_v: float, peak: float = 1.0) -> float:
+def psnr_hdr(mse_v: float, peak: float) -> float:
     if mse_v <= 1e-20:
         return float("inf")
     return float(10.0 * np.log10((peak * peak) / mse_v))
@@ -155,139 +151,46 @@ def union_window_indices(miss_list: List[int], num_tri: int, R: int) -> List[int
 
 
 def main() -> None:
-    epilog = r"""
-示例（在项目根目录）:
+    epilog = """
+示例:
+  python test_h5_native_vs_cache.py -i examples/cbox.h5 -o output/h5_cmp --frames 8 --res 512
 
-  python test_approx_vi_window.py -i examples/cbox.h5 -o output/my_run --frames 8 --res 512
-
-  生成 cbox.h5（若尚无）:
-    python scene_processor/convert_scene.py examples/cbox.json --output_h5_path examples/cbox.h5
+若无 h5:
+  python scene_processor/convert_scene.py examples/cbox.json --output_h5_path examples/cbox.h5
 """
     p = argparse.ArgumentParser(
-        description="连续帧：全量 VI 参考渲染 vs 缓存近似 VI（approx_vi_local_window）对比；输出表格 CSV 与每帧 ref/cache 图像。",
+        description="同一 H5：原生 pipeline.render 与缓存近似路径对比，输出指标与图像。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=epilog,
     )
-
-    io = p.add_argument_group("输入 / 输出")
-    io.add_argument(
-        "-i",
-        "--input",
-        "--h5_file",
-        dest="h5_file",
-        type=str,
-        default="examples/cbox.h5",
-        metavar="PATH",
-        help="场景 HDF5（默认: examples/cbox.h5）",
-    )
-    io.add_argument(
-        "-o",
-        "--output",
-        "--output_dir",
-        dest="output_dir",
-        type=str,
-        default="output/cache_compare_cbox",
-        metavar="DIR",
-        help="输出目录：cache_compare_metrics.csv、各帧 *_ref/_cache 的 exr/png（默认: output/cache_compare_cbox）",
-    )
-
-    mdl = p.add_argument_group("模型与渲染")
-    mdl.add_argument(
-        "--model",
-        "--model_id",
-        dest="model_id",
-        type=str,
-        default="microsoft/renderformer-v1.1-swin-large",
-        metavar="ID",
-        help="Hugging Face 模型 ID 或本地路径（默认: microsoft/renderformer-v1.1-swin-large）",
-    )
-    mdl.add_argument(
-        "--precision",
-        type=str,
-        choices=["bf16", "fp16", "fp32"],
-        default="fp16",
-        help="推理精度（默认: fp16；MPS 上会强制 fp32）",
-    )
-    mdl.add_argument(
-        "--res",
-        "--resolution",
-        dest="resolution",
-        type=int,
-        default=256,
-        metavar="N",
-        help="渲染边长像素（默认: 256，正式对比可设 512）",
-    )
-    mdl.add_argument(
-        "--tone",
-        "--tone_mapper",
-        dest="tone_mapper",
-        type=str,
-        choices=["none", "agx", "filmic", "pbr_neutral"],
-        default="agx",
-        help="仅影响 PNG；EXR 仍为线性 HDR（默认: agx）",
-    )
-
-    cam = p.add_argument_group("连续帧 / 相机")
-    cam.add_argument(
-        "--frames",
-        "--synthetic_frames",
-        dest="synthetic_frames",
-        type=int,
-        default=8,
-        metavar="F",
-        help="帧数。h5 仅 1 个相机时：绕场景原点水平轨道采样 F 帧；多相机时：取前 min(F, 相机数) 个视角（默认: 8）",
-    )
-    cam.add_argument(
-        "--orbit",
-        "--orbit_arc_deg",
-        dest="orbit_arc_deg",
-        type=float,
-        default=40.0,
-        metavar="DEG",
-        help="单相机轨道：相机位置绕 Z 轴从首帧到末帧的总转角，单位度（默认: 40）",
-    )
-
-    cache = p.add_argument_group("缓存近似（approx_vi_local_window）")
-    cache.add_argument(
-        "--miss",
-        "--miss_ratio",
-        dest="miss_ratio",
-        type=float,
-        default=0.08,
-        metavar="P",
-        help="每帧随机选取的 miss 三角形比例（默认: 0.08）",
-    )
-    cache.add_argument(
-        "-R",
-        "--window_radius",
-        type=int,
-        default=4,
-        metavar="R",
-        help="三角索引邻域半径（默认: 4）",
-    )
-    cache.add_argument(
-        "-K",
-        "--num_refiner_layers",
-        type=int,
-        default=2,
-        metavar="K",
-        help="仅重跑 VI 的前 K 层（默认: 2）",
-    )
-
-    p.add_argument("--seed", type=int, default=0, help="随机 miss 等可复现性（默认: 0）")
-
+    p.add_argument("-i", "--input", "--h5_file", dest="h5_file", type=str, default="examples/cbox.h5")
+    p.add_argument("-o", "--output", "--output_dir", dest="output_dir", type=str, default="output/h5_native_vs_cache")
+    p.add_argument("--model", "--model_id", dest="model_id", type=str, default="microsoft/renderformer-v1.1-swin-large")
+    p.add_argument("--precision", choices=["bf16", "fp16", "fp32"], default="fp16")
+    p.add_argument("--res", "--resolution", dest="resolution", type=int, default=256)
+    p.add_argument("--tone", "--tone_mapper", dest="tone_mapper", type=str, default="agx", choices=["none", "agx", "filmic", "pbr_neutral"])
+    p.add_argument("--frames", "--synthetic_frames", dest="synthetic_frames", type=int, default=8)
+    p.add_argument("--orbit", "--orbit_arc_deg", dest="orbit_arc_deg", type=float, default=40.0)
+    p.add_argument("--miss", "--miss_ratio", dest="miss_ratio", type=float, default=0.08)
+    p.add_argument("-R", "--window_radius", type=int, default=4)
+    p.add_argument("-K", "--num_refiner_layers", type=int, default=2)
+    p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
+
     if args.synthetic_frames < 1:
-        print("--synthetic_frames 必须 >= 1", file=sys.stderr)
+        print("--frames 必须 >= 1", file=sys.stderr)
         sys.exit(1)
 
     h5_path = Path(args.h5_file)
     if not h5_path.is_file():
-        print(f"找不到 H5：{h5_path.resolve()}，请先运行 scene_processor/convert_scene.py 生成。", file=sys.stderr)
+        print(f"找不到 H5: {h5_path.resolve()}", file=sys.stderr)
         sys.exit(1)
 
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_root = Path(args.output_dir)
+    dir_native = out_root / "native"
+    dir_cache = out_root / "cache"
+    dir_native.mkdir(parents=True, exist_ok=True)
+    dir_cache.mkdir(parents=True, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(args.seed)
@@ -325,7 +228,7 @@ def main() -> None:
     c2w_stored = raw["c2w"].to(device)
     fov_stored = raw["fov"].to(device)
 
-    texture = preprocess_texture(pipeline, texture_raw)
+    texture_proc = preprocess_texture(pipeline, texture_raw)
 
     c2w_frames, fov_frames = build_frame_cameras(
         c2w_stored,
@@ -333,7 +236,6 @@ def main() -> None:
         synthetic_frames=args.synthetic_frames,
         orbit_arc_deg=args.orbit_arc_deg,
     )
-    # 轨道分支里 torch.from_numpy 在 CPU；与 triangles / pipeline 统一放到同一 device
     c2w_frames = c2w_frames.to(device)
     fov_frames = fov_frames.to(device)
     num_frames = c2w_frames.shape[0]
@@ -345,37 +247,57 @@ def main() -> None:
             tm = "Khronos PBR Neutral"
         tone_mapper = ToneMapper(tm)
 
+    stem = h5_path.stem
     skip = model.skip_token_num
     num_tri = mask.shape[1]
 
-    t0 = time.perf_counter()
+    # —— 一次全量 VI（原生与缓存共用基准）——
+    t_vi0 = time.perf_counter()
     with torch.no_grad(), torch.autocast(device_type=device.type, enabled=device.type == "cuda", dtype=torch_dtype):
         vi_gold = model.forward_vi_only(
             triangles.reshape(1, -1, 9),
-            texture,
+            texture_proc,
             mask,
             vn.reshape(1, -1, 9),
         )
     if device.type == "cuda":
         torch.cuda.synchronize()
-    t_vi_full = time.perf_counter() - t0
+    t_vi_full = time.perf_counter() - t_vi0
 
     _, valid_mask_padded, _ = model.construct_seq(
         triangles.reshape(1, -1, 9),
-        texture,
+        texture_proc,
         mask,
         vn.reshape(1, -1, 9),
     )
 
-    # 首帧：缓存 = 全量 VI；之后每帧用上一帧 vi_apx（相机在变，VD 输出在变，不注入人工噪声）
     vi_cache = vi_gold.clone()
-
     rows: list[dict[str, Any]] = []
-    base_name = h5_path.stem
+    t_native_vd_sum = 0.0
+    t_cache_vi_sum = 0.0
+    t_cache_vd_sum = 0.0
 
     for frame_idx in range(num_frames):
         c2w_1 = c2w_frames[frame_idx : frame_idx + 1].unsqueeze(0)
         fov_1 = fov_frames[frame_idx : frame_idx + 1].unsqueeze(0).unsqueeze(-1)
+
+        # 原生：仅 VD（vi_gold），单视角峰值显存
+        t_n0 = time.perf_counter()
+        with torch.no_grad(), torch.autocast(device_type=device.type, enabled=device.type == "cuda", dtype=torch_dtype):
+            img_native = pipeline.render_from_vi_seq(
+                vi_gold,
+                valid_mask_padded,
+                triangles,
+                mask,
+                c2w_1,
+                fov_1,
+                resolution=args.resolution,
+                torch_dtype=torch_dtype,
+            )
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t_nat_vd = time.perf_counter() - t_n0
+        t_native_vd_sum += t_nat_vd
 
         n_miss = max(1, int(num_tri * args.miss_ratio))
         perm = torch.randperm(num_tri, device=device, generator=gen)[:n_miss]
@@ -388,7 +310,7 @@ def main() -> None:
             vi_apx = approx_vi_local_window(
                 model,
                 triangles.reshape(1, -1, 9),
-                texture,
+                texture_proc,
                 mask,
                 vn.reshape(1, -1, 9),
                 vi_cache,
@@ -399,24 +321,9 @@ def main() -> None:
         if device.type == "cuda":
             torch.cuda.synchronize()
         t_apx = time.perf_counter() - t1
+        t_cache_vi_sum += t_apx
 
         t2 = time.perf_counter()
-        with torch.no_grad(), torch.autocast(device_type=device.type, enabled=device.type == "cuda", dtype=torch_dtype):
-            img_ref = pipeline.render_from_vi_seq(
-                vi_gold,
-                valid_mask_padded,
-                triangles,
-                mask,
-                c2w_1,
-                fov_1,
-                resolution=args.resolution,
-                torch_dtype=torch_dtype,
-            )
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        t_vd_ref = time.perf_counter() - t2
-
-        t3 = time.perf_counter()
         with torch.no_grad(), torch.autocast(device_type=device.type, enabled=device.type == "cuda", dtype=torch_dtype):
             img_cache = pipeline.render_from_vi_seq(
                 vi_apx,
@@ -430,7 +337,20 @@ def main() -> None:
             )
         if device.type == "cuda":
             torch.cuda.synchronize()
-        t_vd_cache = time.perf_counter() - t3
+        t_vd_c = time.perf_counter() - t2
+        t_cache_vd_sum += t_vd_c
+
+        vi_cache = vi_apx.detach()
+
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        hdr_n = img_native[0, 0].float().cpu()
+        hdr_c = img_cache[0, 0].float().cpu()
+        img_mse = mse(hdr_n, hdr_c)
+        img_rmse = rmse(hdr_n, hdr_c)
+        peak = max(float(hdr_n.max()), float(hdr_c.max()), 1.0)
+        img_psnr = psnr_hdr(img_mse, peak)
 
         miss_idx = skip + miss
         mse_vi_all = mse(vi_apx, vi_gold)
@@ -440,93 +360,77 @@ def main() -> None:
             / (vi_gold[:, miss_idx, :].norm() + 1e-8)
         )
 
-        hdr_ref = img_ref[0, 0].float().cpu()
-        hdr_ca = img_cache[0, 0].float().cpu()
-        img_mse = mse(hdr_ref, hdr_ca)
-        img_rmse = rmse(hdr_ref, hdr_ca)
-        peak = max(float(hdr_ref.max()), float(hdr_ca.max()), 1.0)
-        img_psnr = psnr_hdr(img_mse, peak=peak)
-
-        vi_cache = vi_apx.detach()
-
-        ref_exr = out_dir / f"{base_name}_f{frame_idx:03d}_ref.exr"
-        cache_exr = out_dir / f"{base_name}_f{frame_idx:03d}_cache.exr"
-        ref_png = out_dir / f"{base_name}_f{frame_idx:03d}_ref.png"
-        cache_png = out_dir / f"{base_name}_f{frame_idx:03d}_cache.png"
-
-        imageio.v3.imwrite(ref_exr, hdr_ref.numpy().astype(np.float32))
-        imageio.v3.imwrite(cache_exr, hdr_ca.numpy().astype(np.float32))
-
-        def save_png(hdr: torch.Tensor, path: Path) -> None:
+        def save_pair(tag_dir: Path, prefix: str, hdr: torch.Tensor) -> tuple[Path, Path]:
+            exr_p = tag_dir / f"{stem}_f{frame_idx:03d}_{prefix}.exr"
+            png_p = tag_dir / f"{stem}_f{frame_idx:03d}_{prefix}.png"
+            imageio.v3.imwrite(exr_p, hdr.numpy().astype(np.float32))
             if tone_mapper is not None:
                 ldr = tone_mapper.hdr_to_ldr(hdr.numpy().astype(np.float32))
             else:
                 ldr = np.clip(hdr.numpy(), 0, 1)
-            imageio.v3.imwrite(path, (ldr * 255).astype(np.uint8))
+            imageio.v3.imwrite(png_p, (ldr * 255).astype(np.uint8))
+            return exr_p, png_p
 
-        save_png(hdr_ref, ref_png)
-        save_png(hdr_ca, cache_png)
+        exr_n, png_n = save_pair(dir_native, "native", hdr_n)
+        exr_c, png_c = save_pair(dir_cache, "cache", hdr_c)
 
         rows.append(
             {
                 "frame": frame_idx,
                 "n_miss": len(miss_list),
                 "union_win_tris": len(union_win),
+                "t_vd_native_s": t_nat_vd,
                 "t_apx_vi_s": t_apx,
-                "t_vd_ref_s": t_vd_ref,
-                "t_vd_cache_s": t_vd_cache,
-                "mse_vi_all": mse_vi_all,
+                "t_vd_cache_s": t_vd_c,
+                "mse_vi_vs_gold": mse_vi_all,
                 "mse_vi_miss": mse_vi_miss,
                 "rel_l2_vi_miss": rel_l2_miss,
-                "hdr_mse_img": img_mse,
-                "hdr_rmse_img": img_rmse,
-                "psnr_hdr_img": img_psnr,
-                "ref_exr": str(ref_exr),
-                "cache_exr": str(cache_exr),
-                "ref_png": str(ref_png),
-                "cache_png": str(cache_png),
+                "hdr_mse_native_vs_cache": img_mse,
+                "hdr_rmse": img_rmse,
+                "psnr_hdr": img_psnr,
+                "native_exr": str(exr_n),
+                "native_png": str(png_n),
+                "cache_exr": str(exr_c),
+                "cache_png": str(png_c),
             }
         )
 
-    csv_path = out_dir / "cache_compare_metrics.csv"
-    fieldnames = list(rows[0].keys()) if rows else []
-    with open(csv_path, "w", newline="", encoding="utf-8") as cf:
-        w = csv.DictWriter(cf, fieldnames=fieldnames)
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+    csv_path = out_root / "h5_native_vs_cache_metrics.csv"
+    if rows:
+        fieldnames = list(rows[0].keys())
+        with open(csv_path, "w", newline="", encoding="utf-8") as cf:
+            w = csv.DictWriter(cf, fieldnames=fieldnames)
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
 
-    print("\n### 环境\n")
-    print(f"| 项 | 值 |")
-    print(f"|---|---|")
+    # —— 打印 ——
+    print("\n### 汇总\n")
     print(f"| H5 | {h5_path} |")
-    print(f"| 连续帧数 | {num_frames} |")
-    print(f"| 全量 VI 时间 (s) | {t_vi_full:.6f} |")
-    print(f"| miss_ratio | {args.miss_ratio} |")
-    print(f"| R (window_radius) | {args.window_radius} |")
-    print(f"| K (refiner_layers) | {args.num_refiner_layers} |")
-    print(f"| resolution | {args.resolution} |")
-    print(f"| attention (本脚本) | sdpa（代码固定，无需 ATTN_IMPL） |")
+    print(f"| 帧数 | {num_frames} |")
+    print(f"| 全量 VI 一次 (s) | {t_vi_full:.4f} |")
+    print(f"| 原生 Σ仅VD vi_gold (s) | {t_native_vd_sum:.4f} |")
+    print(f"| 缓存 Σ近似VI (s) | {t_cache_vi_sum:.4f} |")
+    print(f"| 缓存 Σ仅VD (s) | {t_cache_vd_sum:.4f} |")
 
-    print("\n### 逐帧对比（缓存机制）\n")
+    print("\n### 逐帧：原生 vs 缓存图像 / VI\n")
     hdr = (
-        "| frame | n_miss | union_win | t_apx_vi(s) | t_vd_ref(s) | t_vd_cache(s) | "
-        "mse_vi_all | mse_vi_miss | rel_L2_miss | hdr_mse | hdr_rmse | PSNR(dB) |"
+        "| frame | n_miss | union_win | t_vd_native | t_apx_vi | t_vd_cache | mse_vi | mse_vi_miss | "
+        "hdr_mse(n,c) | rmse | PSNR |"
     )
     print(hdr)
-    print("|" + "|".join(["---"] * 12) + "|")
+    print("|" + "|".join(["---"] * 11) + "|")
     for r in rows:
         print(
             f"| {r['frame']} | {r['n_miss']} | {r['union_win_tris']} | "
-            f"{r['t_apx_vi_s']:.4f} | {r['t_vd_ref_s']:.4f} | {r['t_vd_cache_s']:.4f} | "
-            f"{r['mse_vi_all']:.4e} | {r['mse_vi_miss']:.4e} | {r['rel_l2_vi_miss']:.4f} | "
-            f"{r['hdr_mse_img']:.4e} | {r['hdr_rmse_img']:.4e} | {r['psnr_hdr_img']:.2f} |"
+            f"{r['t_vd_native_s']:.4f} | {r['t_apx_vi_s']:.4f} | {r['t_vd_cache_s']:.4f} | "
+            f"{r['mse_vi_vs_gold']:.4e} | {r['mse_vi_miss']:.4e} | "
+            f"{r['hdr_mse_native_vs_cache']:.4e} | {r['hdr_rmse']:.4e} | {r['psnr_hdr']:.2f} |"
         )
 
-    mean_psnr = float(np.mean([r["psnr_hdr_img"] for r in rows if np.isfinite(r["psnr_hdr_img"])]))
-    print(f"\n**逐帧 PSNR 均值（有限值）**: {mean_psnr:.2f} dB")
-    print(f"\n**指标 CSV**: {csv_path.resolve()}")
-    print("(说明：K 层局部 VI ≠ 12 层全局 VI；图像对比为近似路径与 gold VI 的 VD 输出差异。)\n")
+    print(f"\n**CSV**: {csv_path.resolve()}")
+    print(f"**原生图像目录**: {dir_native.resolve()}")
+    print(f"**缓存图像目录**: {dir_cache.resolve()}\n")
 
 
 if __name__ == "__main__":

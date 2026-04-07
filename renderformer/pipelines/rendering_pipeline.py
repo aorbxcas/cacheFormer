@@ -124,5 +124,57 @@ class RenderFormerRenderingPipeline:
 
         return rendered_imgs
 
+    def render_from_vi_seq(
+        self,
+        vi_seq: torch.Tensor,
+        valid_mask_padded: torch.Tensor,
+        triangles: torch.Tensor,
+        mask: torch.Tensor,
+        c2w: torch.Tensor,
+        fov: torch.Tensor,
+        resolution: int = 512,
+        torch_dtype: torch.dtype = torch.float16,
+    ):
+        """
+        View-dependent rendering only, using precomputed VI tokens (same ray / camera-space triangles as render()).
+        """
+        bs, nv = c2w.shape[0], c2w.shape[1]
+
+        if self.config.turn_to_cam_coord:
+            c2w_reshaped = c2w.reshape(-1, 4, 4)
+            triangles_repeated = torch.repeat_interleave(triangles, nv, dim=0)
+            tris_for_view_tf, c2w_for_view_tf, _ = trans_to_cam_coord(
+                c2w_reshaped,
+                triangles_repeated
+            )
+            c2w_for_view_tf = c2w_for_view_tf.reshape(bs, nv, 4, 4)
+            tris_for_view_tf = tris_for_view_tf.reshape(bs, nv, -1, 3, 3)
+        else:
+            tris_for_view_tf = triangles.unsqueeze(1).expand(-1, nv, -1, -1, -1)
+            c2w_for_view_tf = c2w
+
+        rays_o, rays_d = self.ray_generator(c2w_for_view_tf, fov / 180. * torch.pi, resolution)
+
+        assert torch_dtype in [torch.bfloat16, torch.float16, torch.float32]
+        tf32_view_tf = torch_dtype == torch.bfloat16 or torch_dtype == torch.float16
+
+        with torch.no_grad(), torch.autocast(device_type=self.device.type, dtype=torch_dtype):
+            rendered_imgs = self.model.forward_from_vi_seq(
+                vi_seq,
+                valid_mask_padded,
+                rays_o,
+                rays_d,
+                tris_for_view_tf.reshape(bs, nv, -1, 9),
+                mask,
+                tf32_view_tf=tf32_view_tf,
+            )
+
+        rendered_imgs = rendered_imgs.permute(0, 1, 3, 4, 2)
+
+        if not self.config.use_ldr:
+            rendered_imgs = torch.pow(10., rendered_imgs) - 1.
+
+        return rendered_imgs
+
     def __call__(self, *args, **kwargs):
         return self.render(*args, **kwargs)

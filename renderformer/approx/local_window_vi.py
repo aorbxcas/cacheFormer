@@ -1,7 +1,10 @@
 """
 近似思路 1：对 miss 邻域子序列做带局部窗口约束的少量 VI 层，窗外 token 的 VI 行沿用缓存。
 
-与全量 12 层全局 attention 不等价；用于可接受的近似与耗时对比实验。
+子序列的 K 层前向在「已有 VI 特征」vi_cached 的切片上进行（而非 construct_seq 的初始嵌入），
+避免在窗口内用「仅 K 层 + 局部」从嵌入重算并覆盖全量 VI，导致首帧即与 vi_gold 严重不一致。
+
+与全量 12 层全局 attention 仍不等价；用于可接受的近似与耗时对比实验。
 """
 
 from __future__ import annotations
@@ -77,6 +80,7 @@ def approx_vi_local_window(
 ) -> torch.Tensor:
     """
     以 vi_cached 为基底；对 miss 三角在半径 window_radius 内的并集子序列上，
+    取 vi_cached 在该子序列上的切片作为 K 层输入（在已有 VI 上修正），
     仅跑前 num_refiner_layers 层 VI，且自注意力受局部窗口限制；其余行保持 vi_cached。
 
     Args:
@@ -100,7 +104,7 @@ def approx_vi_local_window(
         miss_list = list(miss_tri_indices)
     miss_list = sorted({int(m) for m in miss_list if 0 <= int(m) < num_tri})
 
-    seq, valid_padded, tri_pos = model.construct_seq(
+    _, valid_padded, tri_pos = model.construct_seq(
         tri_vpos_list, texture_patch_list, valid_mask, vns
     )
     vi_out = vi_cached.clone()
@@ -118,7 +122,9 @@ def approx_vi_local_window(
     idx_list = list(range(skip)) + [skip + w for w in wsorted]
     idx_tensor = torch.tensor(idx_list, device=device, dtype=torch.long)
 
-    x_win = seq[:, idx_tensor, :].clone()
+    # 在已有 VI（如 vi_gold）子序列上跑 K 层，而不是从初始嵌入 seq 重算，
+    # 否则窗口内会被「仅 K 层」表示覆盖，与窗外全量 VI 混用会破坏第一帧。
+    x_win = vi_cached[:, idx_tensor, :].clone()
     tri_win = tri_pos[:, idx_tensor, :]
     valid_win = valid_padded[:, idx_tensor]
 

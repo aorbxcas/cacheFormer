@@ -203,6 +203,44 @@ class RenderFormer(nn.Module, PyTorchModelHubMixin):
         seq, valid_mask_padded, tri_vpos_list = self.construct_seq(tri_vpos_list, texture_patch_list, valid_mask, vns)
         seq = self.transformer(seq, src_key_padding_mask=valid_mask_padded, triangle_pos=tri_vpos_list)
 
+        return self._forward_view_branch_from_vi_tokens(
+            seq, valid_mask_padded, rays_o, rays_d, tri_vpos_view_tf, valid_mask, tf32_view_tf
+        )
+
+    @torch.no_grad()
+    def forward_from_vi_seq(
+        self,
+        vi_seq: torch.Tensor,
+        valid_mask_padded: torch.Tensor,
+        rays_o: torch.Tensor,
+        rays_d: torch.Tensor,
+        tri_vpos_view_tf: torch.Tensor,
+        valid_mask: torch.Tensor,
+        tf32_view_tf: bool = False,
+    ):
+        """
+        View-dependent stage only, using precomputed VI tokens (e.g. full VI or cache-refined VI).
+
+        vi_seq: [B, skip + N, D]
+        valid_mask_padded: [B, skip + N]
+        rays_o: [B, num_views, 3], rays_d: [B, num_views, H, W, 3]
+        tri_vpos_view_tf: [B, num_views, N, 9]
+        valid_mask: [B, N]
+        """
+        return self._forward_view_branch_from_vi_tokens(
+            vi_seq, valid_mask_padded, rays_o, rays_d, tri_vpos_view_tf, valid_mask, tf32_view_tf
+        )
+
+    def _forward_view_branch_from_vi_tokens(
+        self,
+        seq: torch.Tensor,
+        valid_mask_padded: torch.Tensor,
+        rays_o: torch.Tensor,
+        rays_d: torch.Tensor,
+        tri_vpos_view_tf: torch.Tensor,
+        valid_mask: torch.Tensor,
+        tf32_view_tf: bool,
+    ):
         batch_size, num_views = rays_o.size(0), rays_o.size(1)
         seq = seq.repeat_interleave(num_views, dim=0)
         rays_o = rays_o.view(-1, *rays_o.shape[2:])
@@ -220,5 +258,5 @@ class RenderFormer(nn.Module, PyTorchModelHubMixin):
             valid_mask_padded,
             tf32_mode=tf32_view_tf
         )
-        res = res.view(batch_size, num_views, *res.size()[1:])  # [batch_size * num_views, ...] -> [batch_size, num_views, ...]
+        res = res.view(batch_size, num_views, *res.size()[1:])
         return res
