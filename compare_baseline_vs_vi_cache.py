@@ -58,6 +58,7 @@ def run_sequence(
     output_dir: Optional[str] = None,
     run_label: str = "baseline",
     save_frames: int = 0,
+    cache_refresh_interval: int = 0,
 ) -> Tuple[List[float], Dict]:
     """
     按 variants 前 n 组相机各渲染一帧，返回每帧耗时列表与汇总信息。
@@ -79,7 +80,16 @@ def run_sequence(
         os.makedirs(save_dir, exist_ok=True)
 
     frame_times: List[float] = []
+    refresh_count = 0
     for i in range(n):
+        if (
+            vi_cache is not None
+            and cache_refresh_interval > 0
+            and i > 0
+            and i % cache_refresh_interval == 0
+        ):
+            vi_cache.clear()
+            refresh_count += 1
         var = variants[i]
         name = var.get("name", str(i + 1))
         c2w, fov = _apply_camera_variant(
@@ -130,6 +140,8 @@ def run_sequence(
         info["cache_hits"] = s["hits"]
         info["cache_misses"] = s["misses"]
         info["cache_hit_rate"] = s["hit_rate"]
+        info["cache_refresh_interval"] = cache_refresh_interval
+        info["cache_refresh_count"] = refresh_count
     return frame_times, info
 
 
@@ -167,6 +179,12 @@ def main():
         help="VI 缓存最大条目数（仅影响「启用缓存」一轮）",
     )
     parser.add_argument(
+        "--cache_refresh_interval",
+        type=int,
+        default=0,
+        help="缓存轮每 N 帧清空一次缓存（0=不清空；>0 可模拟 hybrid 周期全量刷新）",
+    )
+    parser.add_argument(
         "--warmup",
         type=int,
         default=1,
@@ -189,6 +207,8 @@ def main():
 
     if args.save_frames > 0 and not args.output_dir:
         parser.error("使用 --save_frames 时需同时指定 --output_dir")
+    if args.cache_refresh_interval < 0:
+        parser.error("--cache_refresh_interval 必须 >= 0")
 
     device = torch.device(
         "cuda"
@@ -265,6 +285,7 @@ def main():
         output_dir=args.output_dir,
         run_label="with_cache",
         save_frames=args.save_frames,
+        cache_refresh_interval=args.cache_refresh_interval,
     )
     _sync(device)
 
@@ -304,6 +325,11 @@ def main():
         info_cached.get("cache_misses", 0),
         (info_cached.get("cache_hit_rate", 0) or 0) * 100,
     ))
+    if args.cache_refresh_interval > 0:
+        print("  缓存周期清空:            每 %d 帧清空一次, 共清空 %d 次" % (
+            args.cache_refresh_interval,
+            info_cached.get("cache_refresh_count", 0),
+        ))
     print("=" * 60)
 
     # ----- 每帧耗时明细（第 1 帧为 miss，第 2～n 帧为 hit） -----

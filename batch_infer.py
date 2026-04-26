@@ -13,6 +13,7 @@ import imageio
 from tqdm import tqdm
 
 from renderformer import RenderFormerRenderingPipeline, ViewIndependentCache
+from renderformer.layers.attention import ATTN as ATTN_IMPL
 from simple_ocio import ToneMapper
 
 
@@ -72,7 +73,11 @@ def main():
     parser.add_argument("--num_workers", type=int, default=0, help="Number of workers for data loading")
     parser.add_argument("--output_dir", type=str, default=None, 
                         help="Output directory for rendered images (default: same as input folder)")
-    parser.add_argument("--save_video", action='store_true', default=True, help="Merge rendered images into a video at video.mp4.")
+    parser.add_argument("--save_video", dest="save_video", action="store_true",
+                        help="Merge rendered images into a video at video.mp4.")
+    parser.add_argument("--no_save_video", dest="save_video", action="store_false",
+                        help="Disable merging rendered images into video.")
+    parser.set_defaults(save_video=True)
     parser.add_argument("--tone_mapper", type=str, choices=['none', 'agx', 'filmic', 'pbr_neutral'], default='none', help="Tone mapper for inference")
     parser.add_argument("--perf_json", type=str, default=None,
                         help="Write performance report JSON (default: <output_dir>/render_perf.json)")
@@ -81,11 +86,17 @@ def main():
                         help="Enable VI cache (view-independent stage); 启用时强制 batch_size=1，同场景多帧/多视角会命中缓存加速")
     parser.add_argument("--vi_cache_max_entries", type=int, default=64,
                         help="VI cache 最大条目数 (default: 64)")
+    parser.add_argument("--vi_cache_full_refresh_interval", type=int, default=0,
+                        help="每 N 个 batch 清空一次 VI 缓存（0=不清空，用于 hybrid fallback 基线）")
+    parser.add_argument("--vi_cache_runtime_tag", type=str, default="",
+                        help="可选：附加在 VI 缓存命名空间中的自定义标签，用于实验隔离")
     args = parser.parse_args()
 
     if args.vi_cache and args.batch_size != 1:
         args.batch_size = 1
         print("VI cache 仅支持 batch_size=1，已自动设为 1")
+    if args.vi_cache_full_refresh_interval < 0:
+        parser.error("--vi_cache_full_refresh_interval 必须 >= 0")
 
     # Determine device
     device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
@@ -137,6 +148,15 @@ def main():
     if args.vi_cache:
         vi_cache = ViewIndependentCache(max_entries=args.vi_cache_max_entries)
         print(f"VI cache 已启用，max_entries={args.vi_cache_max_entries}")
+        if args.vi_cache_full_refresh_interval > 0:
+            print(f"VI cache 周期清空已启用，每 {args.vi_cache_full_refresh_interval} 个 batch 清空一次")
+
+    vi_cache_runtime_info = {
+        "model_id": args.model_id,
+        "precision": args.precision,
+        "attention_impl": ATTN_IMPL,
+        "runtime_tag": args.vi_cache_runtime_tag,
+    }
 
     perf: Dict[str, Any] = {}
     batch_infer_ms: List[float] = []
@@ -171,6 +191,13 @@ def main():
         # Perform inference (with optional VI cache when batch_size=1)
         t1 = time.perf_counter()
         use_vi_cache_this_batch = vi_cache is not None and batch_size == 1
+        if (
+            use_vi_cache_this_batch
+            and args.vi_cache_full_refresh_interval > 0
+            and batch_idx > 0
+            and batch_idx % args.vi_cache_full_refresh_interval == 0
+        ):
+            vi_cache.clear()
         if use_vi_cache_this_batch:
             out = pipeline(
                 triangles=triangles,
@@ -182,6 +209,7 @@ def main():
                 resolution=args.resolution,
                 torch_dtype=torch.float16 if args.precision == 'fp16' else torch.bfloat16 if args.precision == 'bf16' else torch.float32,
                 vi_cache=vi_cache,
+                vi_cache_runtime_info=vi_cache_runtime_info,
                 return_vi_cache_info=True,
             )
             rendered_imgs, vi_info = out
@@ -295,6 +323,8 @@ def main():
             perf["vi_cache_hits"] = vi_cache_hits
             perf["vi_cache_misses"] = vi_cache_misses
             perf["vi_cache_hit_rate"] = round(vi_cache_hits / total_vi, 4) if total_vi else 0.0
+            perf["vi_cache_full_refresh_interval"] = args.vi_cache_full_refresh_interval
+            perf["vi_cache_runtime_tag"] = args.vi_cache_runtime_tag
         if use_cuda:
             perf["peak_gpu_memory_allocated_mib"] = round(
                 torch.cuda.max_memory_allocated() / (1024 ** 2), 2)

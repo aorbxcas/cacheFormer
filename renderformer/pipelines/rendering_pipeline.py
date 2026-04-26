@@ -2,6 +2,7 @@ import torch
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from renderformer.models.renderformer import RenderFormer
+from renderformer.layers.attention import ATTN as ATTN_IMPL
 from renderformer.utils.ray_generator import RayGenerator
 from renderformer.utils.transform import trans_to_cam_coord
 
@@ -38,6 +39,18 @@ class RenderFormerRenderingPipeline:
         self.model.to(device)
         self.ray_generator.to(device)
 
+    def _build_runtime_cache_info(self, torch_dtype: torch.dtype) -> Dict[str, Any]:
+        return {
+            "model_arch": "renderformer",
+            "model_num_layers": self.config.num_layers,
+            "latent_dim": self.config.latent_dim,
+            "rope_type": self.config.rope_type,
+            "use_ldr": self.config.use_ldr,
+            "attention_impl": ATTN_IMPL,
+            "torch_dtype": str(torch_dtype),
+            "device_type": self.device.type,
+        }
+
     def render(
         self,
         triangles,
@@ -49,6 +62,7 @@ class RenderFormerRenderingPipeline:
         resolution: int = 512,
         torch_dtype: torch.dtype = torch.float16,
         vi_cache: Optional["ViewIndependentCache"] = None,
+        vi_cache_runtime_info: Optional[Dict[str, Any]] = None,
         return_vi_cache_info: bool = False,
     ):
         """
@@ -58,13 +72,14 @@ class RenderFormerRenderingPipeline:
             triangles, texture, mask, vn, c2w, fov: 与原版一致
             resolution, torch_dtype: 与原版一致
             vi_cache: 可选；ViewIndependentCache 实例，用于跨帧/跨视角复用 VI 特征
+            vi_cache_runtime_info: 可选；用于缓存命名空间隔离（模型/精度/后端等）
             return_vi_cache_info: 为 True 时额外返回本次是否命中 VI 缓存（便于实验统计）
 
         Returns:
             默认: [bs, nv, H, W, 3]
             若 return_vi_cache_info: (tensor, {"vi_cache_hit": bool, "vi_cache_key": str|None})
         """
-        from renderformer.cache.vi_cache import scene_fingerprint
+        from renderformer.cache.vi_cache import runtime_fingerprint, scene_fingerprint
 
         bs, nv = c2w.shape[0], c2w.shape[1]
 
@@ -120,7 +135,14 @@ class RenderFormerRenderingPipeline:
             )
 
         if use_vi_cache:
-            cache_key = scene_fingerprint(triangles, texture, vn, mask)
+            scene_key = scene_fingerprint(triangles, texture, vn, mask)
+            runtime_info = (
+                vi_cache_runtime_info
+                if vi_cache_runtime_info is not None
+                else self._build_runtime_cache_info(torch_dtype)
+            )
+            runtime_key = runtime_fingerprint(runtime_info)
+            cache_key = f"{runtime_key}:{scene_key}"
             entry = vi_cache.get(cache_key)
         else:
             entry = None

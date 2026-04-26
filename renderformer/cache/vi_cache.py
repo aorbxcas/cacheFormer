@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 
@@ -51,6 +52,21 @@ def scene_fingerprint(
     m = mask.detach().cpu().to(torch.bool).contiguous()
     h.update(m.numpy().tobytes())
     return h.hexdigest()
+
+
+def runtime_fingerprint(runtime_info: Optional[Dict[str, Any]]) -> str:
+    """
+    为缓存构造运行时命名空间（模型/精度/注意力实现等）。
+
+    设计目的：
+    - 避免在同一个缓存实例中混用不同模型或不同数值路径；
+    - runtime_info 为空时返回固定值，保证默认行为兼容。
+    """
+    if not runtime_info:
+        return "runtime:default"
+    payload = json.dumps(runtime_info, sort_keys=True, ensure_ascii=True, default=str)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"runtime:{digest}"
 
 
 class ViewIndependentCache:
