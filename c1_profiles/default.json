@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "description": "C1-a residual indirect head defaults",
+  "head": {
+    "use_neural": true,
+    "use_depth": true,
+    "base_channels": 48,
+    "num_blocks": 4
+  },
+  "train": {
+    "epochs": 80,
+    "batch_size": 2,
+    "lr": 0.0003,
+    "w_indirect": 1.0,
+    "w_compose": 2.0,
+    "neural_dropout": 0.15
+  },
+  "infer": {
+    "alpha": 1.0,
+    "resolution": 256
+  }
+}

@@ -169,3 +169,9 @@ output/
 tmp/
 gt_cache/
 hybrid_profiles/local/
+data/c1/**
+!data/c1/README.md
+!c1_profiles/
+
+out/
+
