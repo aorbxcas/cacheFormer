@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "mode": "path_b_runtime_direct",
+  "scene_fp": "",
+  "source_json": "examples/cbox.json",
+  "h5_path": "tmp/cbox/cbox.h5",
+  "alignment": {
+    "direct_scale_s": 1.0,
+    "direct_bias_b": 0.0,
+    "fitted_against": "manual"
+  },
+  "runtime_direct": {
+    "backend": "auto",
+    "shadow_map_size": 1024,
+    "brdf": "ggx_simplified"
+  },
+  "confidence": {
+    "w0": 2.0,
+    "w1": 4.0,
+    "w2": 1.0,
+    "w3": 2.0,
+    "w4": 0.0
+  },
+  "use_physics_correct": true,
+  "fixed_alpha": null
+}

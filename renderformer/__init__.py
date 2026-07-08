@@ -8,3 +8,10 @@ __all__ = [
     "ViewIndependentCache",
     "scene_fingerprint",
 ]
+
+try:
+    from renderformer.hybrid import HybridFusionPipeline, HybridRenderContext, HybridProfile
+
+    __all__ += ["HybridFusionPipeline", "HybridRenderContext", "HybridProfile"]
+except ImportError:
+    pass

@@ -167,3 +167,5 @@ checkpoints/
 video-data/
 output/
 tmp/
+gt_cache/
+hybrid_profiles/local/
