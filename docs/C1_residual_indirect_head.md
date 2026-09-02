@@ -1,7 +1,7 @@
 # C1 路线：冻结 RenderFormer + 残差间接光头
 
-> **版本**：1.1  
-> **状态**：设计草案（M0）  
+> **版本**：1.2  
+> **状态**：本阶段终局定为 **L0 `pruned_stub` + 全分辨率刷新**（相对 CacheFormer ~1.9×；跳过帧冻结 Indirect）  
 > **关联**：[`scheme4_hybrid_gi_plan.md`](./scheme4_hybrid_gi_plan.md)、[`project_c_quality_controlled_neural_gi.md`](./project_c_quality_controlled_neural_gi.md)、[`实验记录_同场景VI缓存.md`](./实验记录_同场景VI缓存.md)、[`engine_domain_perf_directions.md`](./engine_domain_perf_directions.md)  
 > **定位**：在「不从零训练大模型」的前提下，让 **Direct / Indirect 在语义上真正分开**，并继续沿用 CacheFormer 的缓存与调度思想。
 
@@ -331,7 +331,23 @@ L_{\mathrm{out}} = L_{\mathrm{direct}}^{\mathrm{classic}} + \alpha \cdot I_{\mat
 | M0 | 本文档 + 数据格式约定 | 评审通过 | **完成** |
 | M1 | GT/Direct 对齐脚本，导出 Direct/GT/I* / gt_cache | align_report 可复现 | **完成（伪 GT + 真实 Cycles GT）** |
 | M2 | C1-a 训练 + 推理接 confidence α | 目标 0；eval/compare 可跑 | **完成（真实 GT 上 decompose 基线可打）** |
-| M3 | 隔帧 II + Direct 每帧对比实验 | 动态序列加速比与 FLIP | **速度目标达成（L0/L1）；FLIP 待补** |
+| M3 | 隔帧 II + Direct 每帧对比实验 | 动态序列加速比与 FLIP | **本阶段以 stub 全分辨率锁定速度目标；FLIP/真 Direct 留后续** |
+
+### 本阶段终局（stub @ full-res）
+
+动态序列（cbox，12 帧，每 3 帧换 roughness）：
+
+| 配置 | mean ms | vs CacheFormer | 说明 |
+|------|---------|----------------|------|
+| CacheFormer | ~325 | 1× | 每帧 RF+VI |
+| **pruned_stub neural_res=1.0** | **~167** | **~1.94×** | 刷新全分辨率 RF；跳过帧复用 `I_buffer`、无 Direct |
+
+```bash
+python tools/benchmark_pruned_l0_l1.py --h5_file tmp/c1_scenes/cbox.h5 \
+  --refresh_every 3 --neural_res_scale 1.0 --direct_mode stub --no_c1_head
+```
+
+后续：快 Direct 接回 `always`、补 FLIP；本阶段验收以「计算剪枝相对 CF 提速」为准。
 
 ### M3 剪枝实现（L0 / L1）
 
