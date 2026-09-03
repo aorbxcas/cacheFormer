@@ -1,0 +1,255 @@
+{
+  "scene": "crystals",
+  "dynamic": "orbit_only",
+  "h5": "tmp/c1_scenes/crystals.h5",
+  "cacheformer": {
+    "mean_ms": 152.6872499998717,
+    "fps": 6.5493353243367745,
+    "rf_calls": 12,
+    "cache_hits": 11,
+    "frames": [
+      {
+        "frame": 1,
+        "name": "f01_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 208.80290000059176,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 2,
+        "name": "f02_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 142.186800003401,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 3,
+        "name": "f03_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 151.18850000726525,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 4,
+        "name": "f04_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 148.30680000886787,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 5,
+        "name": "f05_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 148.37319999060128,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 6,
+        "name": "f06_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 143.16769999277312,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 7,
+        "name": "f07_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 144.53320000029635,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 8,
+        "name": "f08_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 146.11319999676198,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 9,
+        "name": "f09_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 151.7743000003975,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 10,
+        "name": "f10_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 147.45340000081342,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 11,
+        "name": "f11_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 148.447200001101,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 12,
+        "name": "f12_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 151.89979999559,
+        "vi_cache_hit": true
+      }
+    ]
+  },
+  "pruned": {
+    "mean_ms": 58.52750000000621,
+    "fps": 17.085985220620973,
+    "rf_calls": 4,
+    "refreshes": 4,
+    "skips": 8,
+    "pipe_stats": {
+      "frames": 12,
+      "refreshes": 4,
+      "skips": 8,
+      "rf_calls": 4,
+      "direct_calls": 0,
+      "reprojects": 8
+    },
+    "frames": [
+      {
+        "frame": 1,
+        "name": "f01_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 219.79350000037812,
+        "refreshed": true,
+        "reason": "force_or_empty",
+        "hole_ratio": null
+      },
+      {
+        "frame": 2,
+        "name": "f02_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 7.097300011082552,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.0587158203125
+      },
+      {
+        "frame": 3,
+        "name": "f03_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 6.523099989863113,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.10858154296875
+      },
+      {
+        "frame": 4,
+        "name": "f04_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 147.98650000011548,
+        "refreshed": true,
+        "reason": "interval",
+        "hole_ratio": null
+      },
+      {
+        "frame": 5,
+        "name": "f05_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 4.4683000014629215,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.0587158203125
+      },
+      {
+        "frame": 6,
+        "name": "f06_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 4.373500007204711,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.10858154296875
+      },
+      {
+        "frame": 7,
+        "name": "f07_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 144.83439999457914,
+        "refreshed": true,
+        "reason": "interval",
+        "hole_ratio": null
+      },
+      {
+        "frame": 8,
+        "name": "f08_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 6.230300001334399,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.0587158203125
+      },
+      {
+        "frame": 9,
+        "name": "f09_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 6.145999999716878,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.10858154296875
+      },
+      {
+        "frame": 10,
+        "name": "f10_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 145.7624000031501,
+        "refreshed": true,
+        "reason": "interval",
+        "hole_ratio": null
+      },
+      {
+        "frame": 11,
+        "name": "f11_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 4.520899994531646,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.0587158203125
+      },
+      {
+        "frame": 12,
+        "name": "f12_orbit",
+        "scene_key": "static",
+        "elapsed_ms": 4.593799996655434,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.10858154296875
+      }
+    ]
+  },
+  "speedup_vs_cf": 2.6088120968750674,
+  "mean_abs_l1_vs_cf": 0.03277810104191303,
+  "mean_psnr_vs_cf": 46.86175852108102,
+  "per_frame_abs_l1": [
+    0.0,
+    0.0352240651845932,
+    0.05634808540344238,
+    0.0,
+    0.03939991816878319,
+    0.059308286756277084,
+    0.0,
+    0.04088263586163521,
+    0.060441743582487106,
+    0.0,
+    0.040613412857055664,
+    0.061119064688682556
+  ],
+  "per_frame_psnr": [
+    99.0,
+    21.64127597575886,
+    18.893497584456302,
+    99.0,
+    21.91203999367165,
+    19.553754572013183,
+    99.0,
+    22.50419930471409,
+    20.036899952999967,
+    99.0,
+    22.395007428267974,
+    19.404427441090203
+  ],
+  "pass_speed": true,
+  "pass_quality_soft": true
+}

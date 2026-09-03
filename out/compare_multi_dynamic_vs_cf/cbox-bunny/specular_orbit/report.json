@@ -1,0 +1,255 @@
+{
+  "scene": "cbox-bunny",
+  "dynamic": "specular_orbit",
+  "h5": "tmp/c1_scenes/cbox-bunny.h5",
+  "cacheformer": {
+    "mean_ms": 356.44795833165216,
+    "fps": 2.8054586276226154,
+    "rf_calls": 12,
+    "cache_hits": 8,
+    "frames": [
+      {
+        "frame": 1,
+        "name": "f01_spec0.4",
+        "scene_key": "spec_0.4",
+        "elapsed_ms": 586.8613999919035,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 2,
+        "name": "f02_spec0.4",
+        "scene_key": "spec_0.4",
+        "elapsed_ms": 245.3172999958042,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 3,
+        "name": "f03_spec0.4",
+        "scene_key": "spec_0.4",
+        "elapsed_ms": 241.35029999888502,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 4,
+        "name": "f04_spec1.0",
+        "scene_key": "spec_1.0",
+        "elapsed_ms": 566.5156000031857,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 5,
+        "name": "f05_spec1.0",
+        "scene_key": "spec_1.0",
+        "elapsed_ms": 249.15610000607558,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 6,
+        "name": "f06_spec1.0",
+        "scene_key": "spec_1.0",
+        "elapsed_ms": 247.03389999922365,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 7,
+        "name": "f07_spec1.6",
+        "scene_key": "spec_1.6",
+        "elapsed_ms": 563.3449999877485,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 8,
+        "name": "f08_spec1.6",
+        "scene_key": "spec_1.6",
+        "elapsed_ms": 243.97329999192152,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 9,
+        "name": "f09_spec1.6",
+        "scene_key": "spec_1.6",
+        "elapsed_ms": 250.6168000109028,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 10,
+        "name": "f10_spec0.7",
+        "scene_key": "spec_0.7",
+        "elapsed_ms": 573.6895000009099,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 11,
+        "name": "f11_spec0.7",
+        "scene_key": "spec_0.7",
+        "elapsed_ms": 254.82999999076128,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 12,
+        "name": "f12_spec0.7",
+        "scene_key": "spec_0.7",
+        "elapsed_ms": 254.68630000250414,
+        "vi_cache_hit": true
+      }
+    ]
+  },
+  "pruned": {
+    "mean_ms": 223.71060000053453,
+    "fps": 4.470060873278292,
+    "rf_calls": 4,
+    "refreshes": 4,
+    "skips": 8,
+    "pipe_stats": {
+      "frames": 12,
+      "refreshes": 4,
+      "skips": 8,
+      "rf_calls": 4,
+      "direct_calls": 0,
+      "reprojects": 8
+    },
+    "frames": [
+      {
+        "frame": 1,
+        "name": "f01_spec0.4",
+        "scene_key": "spec_0.4",
+        "elapsed_ms": 573.8761999964481,
+        "refreshed": true,
+        "reason": "force_or_empty",
+        "hole_ratio": null
+      },
+      {
+        "frame": 2,
+        "name": "f02_spec0.4",
+        "scene_key": "spec_0.4",
+        "elapsed_ms": 267.986299993936,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.047119140625
+      },
+      {
+        "frame": 3,
+        "name": "f03_spec0.4",
+        "scene_key": "spec_0.4",
+        "elapsed_ms": 118.15270000079181,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.082489013671875
+      },
+      {
+        "frame": 4,
+        "name": "f04_spec1.0",
+        "scene_key": "spec_1.0",
+        "elapsed_ms": 562.8336000081617,
+        "refreshed": true,
+        "reason": "scene_change",
+        "hole_ratio": null
+      },
+      {
+        "frame": 5,
+        "name": "f05_spec1.0",
+        "scene_key": "spec_1.0",
+        "elapsed_ms": 9.918499999912456,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.047119140625
+      },
+      {
+        "frame": 6,
+        "name": "f06_spec1.0",
+        "scene_key": "spec_1.0",
+        "elapsed_ms": 5.72719999763649,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.082489013671875
+      },
+      {
+        "frame": 7,
+        "name": "f07_spec1.6",
+        "scene_key": "spec_1.6",
+        "elapsed_ms": 561.7531000025338,
+        "refreshed": true,
+        "reason": "scene_change",
+        "hole_ratio": null
+      },
+      {
+        "frame": 8,
+        "name": "f08_spec1.6",
+        "scene_key": "spec_1.6",
+        "elapsed_ms": 4.605199996149167,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.047119140625
+      },
+      {
+        "frame": 9,
+        "name": "f09_spec1.6",
+        "scene_key": "spec_1.6",
+        "elapsed_ms": 4.46340000780765,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.082489013671875
+      },
+      {
+        "frame": 10,
+        "name": "f10_spec0.7",
+        "scene_key": "spec_0.7",
+        "elapsed_ms": 565.8672000135994,
+        "refreshed": true,
+        "reason": "scene_change",
+        "hole_ratio": null
+      },
+      {
+        "frame": 11,
+        "name": "f11_spec0.7",
+        "scene_key": "spec_0.7",
+        "elapsed_ms": 4.726799990748987,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.047119140625
+      },
+      {
+        "frame": 12,
+        "name": "f12_spec0.7",
+        "scene_key": "spec_0.7",
+        "elapsed_ms": 4.616999998688698,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.082489013671875
+      }
+    ]
+  },
+  "speedup_vs_cf": 1.5933440718982492,
+  "mean_abs_l1_vs_cf": 0.011851042625494301,
+  "mean_psnr_vs_cf": 42.165153532985464,
+  "per_frame_abs_l1": [
+    0.0,
+    0.022260814905166626,
+    0.024840250611305237,
+    0.0,
+    0.019419290125370026,
+    0.030430056154727936,
+    0.0,
+    0.003353700041770935,
+    0.004317113664001226,
+    0.0,
+    0.01741609163582325,
+    0.02017519436776638
+  ],
+  "per_frame_psnr": [
+    99.0,
+    0.7492712717698541,
+    6.458887745254272,
+    99.0,
+    18.763829844170104,
+    16.525068131729835,
+    99.0,
+    26.845718369538176,
+    24.507994766168032,
+    99.0,
+    8.96271386872743,
+    7.16835839846785
+  ],
+  "pass_speed": true,
+  "pass_quality_soft": true
+}

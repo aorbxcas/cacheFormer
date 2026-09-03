@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-L0/L1 计算剪枝管线：间接缓冲 + 低频神经刷新。
+L0/L1 计算剪枝管线：间接/融合缓冲 + 低频神经刷新。
 
-L0（调度剪枝）:
-  - 换场景 / 每 N 帧 → refresh：跑神经写 I_buffer
-  - 其余帧：不调用 RF，L = Direct + I_buffer
+质量约束（quality_lock=True，P0–P2 默认）：
+  - neural_res_scale / direct_res_scale 强制为 1.0（禁止半分辨率）
+  - 跳过帧用全分辨率深度重投影跟相机（非降采样）
+  - 刷新帧全分辨率 RF +（可选）深度/Direct；VI 缓存可叠
 
-L1（刷新降本）:
-  - neural_res_scale / direct_res_scale：低分辨率 RF / Direct
-  - `parallel_refresh`：刷新帧 Direct∥RF（墙钟 ≈ max）；**默认关**——lite Direct + RF 多流在本机实测会严重退化（刷新帧升至数秒）
-
-direct_mode: always | refresh_only | stub
+view_follow:
+  - reproject: 跳过帧重投影上一帧融合结果（推荐，无 nvd 也能超 CF）
+  - direct_plus_i: 跳过帧跑全分 Direct + 重投影 I（需快 Direct）
+  - freeze: 跳过帧不跟相机（仅消融）
 """
 
 from __future__ import annotations
@@ -22,9 +22,15 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
+from renderformer.c1.reproject import (
+    analytic_plane_depth,
+    camera_rotation_deg,
+    reproject_by_depth,
+    reproject_inverse_bilinear,
+    warp_depth_forward,
+)
 from renderformer.c1.residual_head import ResidualIndirectHead, fuse_direct_indirect
 from renderformer.cache.vi_cache import ViewIndependentCache, scene_fingerprint
-from renderformer.hybrid.runtime_direct.factory import create_runtime_direct_renderer
 
 if False:  # TYPE_CHECKING
     from renderformer.pipelines.rendering_pipeline import RenderFormerRenderingPipeline
@@ -40,18 +46,26 @@ class PrunedFrameResult:
 
 
 class PrunedIndirectPipeline:
-    """L = Direct + α * I_buffer；神经只在 refresh 进入计算图。"""
+    """L = Direct + α * I；或质量模式下融合缓冲重投影。"""
 
     def __init__(
         self,
         rf_pipeline: "RenderFormerRenderingPipeline",
         *,
         refresh_every: int = 3,
-        neural_res_scale: float = 0.5,
-        direct_res_scale: float = 0.25,
+        neural_res_scale: float = 1.0,
+        direct_res_scale: float = 1.0,
         parallel_refresh: bool = False,
         alpha: float = 1.0,
-        direct_mode: str = "always",
+        direct_mode: str = "stub",
+        view_follow: str = "reproject",
+        quality_lock: bool = True,
+        max_camera_rot_deg: float = 25.0,
+        max_hole_ratio: float = 0.35,
+        depth_mode: str = "analytic",
+        depth_aux_scale: float = 0.5,
+        reproject_mode: str = "inverse",
+        guard_refreshes_after_scene_change: int = 0,
         direct_renderer: Optional[object] = None,
         head: Optional[ResidualIndirectHead] = None,
         vi_cache: Optional[ViewIndependentCache] = None,
@@ -59,6 +73,18 @@ class PrunedIndirectPipeline:
     ):
         if direct_mode not in ("always", "refresh_only", "stub"):
             raise ValueError("direct_mode must be always|refresh_only|stub")
+        if view_follow not in ("reproject", "direct_plus_i", "freeze"):
+            raise ValueError("view_follow must be reproject|direct_plus_i|freeze")
+
+        self.quality_lock = bool(quality_lock)
+        if self.quality_lock:
+            if neural_res_scale < 1.0 - 1e-6 or direct_res_scale < 1.0 - 1e-6:
+                raise ValueError(
+                    "quality_lock=True 禁止半分辨率：neural/direct_res_scale 必须为 1.0"
+                )
+            neural_res_scale = 1.0
+            direct_res_scale = 1.0
+
         if not (0.125 <= neural_res_scale <= 1.0):
             raise ValueError("neural_res_scale should be in [0.125, 1]")
         if not (0.125 <= direct_res_scale <= 1.0):
@@ -71,9 +97,35 @@ class PrunedIndirectPipeline:
         self.parallel_refresh = bool(parallel_refresh)
         self.alpha = float(alpha)
         self.direct_mode = direct_mode
-        self.direct_renderer = direct_renderer or create_runtime_direct_renderer(
-            backend="lite", ray_chunk=2048
+        self.view_follow = view_follow
+        self.max_camera_rot_deg = float(max_camera_rot_deg)
+        self.max_hole_ratio = float(max_hole_ratio)
+        if depth_mode not in ("analytic", "raycast"):
+            raise ValueError("depth_mode must be analytic|raycast")
+        self.depth_mode = depth_mode
+        self.depth_aux_scale = float(depth_aux_scale)
+        if not (0.25 <= self.depth_aux_scale <= 1.0):
+            raise ValueError("depth_aux_scale should be in [0.25, 1]")
+        if reproject_mode not in ("inverse", "forward"):
+            raise ValueError("reproject_mode must be inverse|forward")
+        self.reproject_mode = reproject_mode
+        self.guard_refreshes_after_scene_change = max(
+            0, int(guard_refreshes_after_scene_change)
         )
+        self._guard_left = 0
+        from renderformer.hybrid.runtime_direct.factory import (
+            create_runtime_direct_renderer,
+            nvdiffrast_available,
+        )
+
+        if direct_renderer is not None:
+            self.direct_renderer = direct_renderer
+        elif nvdiffrast_available():
+            self.direct_renderer = create_runtime_direct_renderer(backend="nvdiffrast")
+        else:
+            self.direct_renderer = create_runtime_direct_renderer(
+                backend="lite", ray_chunk=8192
+            )
         self.head = head
         self.vi_cache = vi_cache if vi_cache is not None else ViewIndependentCache(16)
         self.auto_align_direct = auto_align_direct
@@ -82,7 +134,10 @@ class PrunedIndirectPipeline:
         self._last_scene_key: Optional[str] = None
         self._i_buffer: Optional[torch.Tensor] = None
         self._d_buffer: Optional[torch.Tensor] = None
+        self._fused_buffer: Optional[torch.Tensor] = None
         self._depth_buffer: Optional[torch.Tensor] = None
+        self._c2w_buffer: Optional[torch.Tensor] = None
+        self._fov_buffer: Optional[torch.Tensor] = None
 
         self.stats = {
             "frames": 0,
@@ -90,6 +145,7 @@ class PrunedIndirectPipeline:
             "skips": 0,
             "rf_calls": 0,
             "direct_calls": 0,
+            "reprojects": 0,
         }
 
     @property
@@ -107,17 +163,25 @@ class PrunedIndirectPipeline:
         self._last_scene_key = None
         self._i_buffer = None
         self._d_buffer = None
+        self._fused_buffer = None
         self._depth_buffer = None
+        self._c2w_buffer = None
+        self._fov_buffer = None
+        self._guard_left = 0
         self.vi_cache.clear()
         self.stats = {k: 0 for k in self.stats}
 
     def _scaled_res(self, resolution: int, scale: float) -> int:
+        if self.quality_lock:
+            return int(resolution)
         r = max(32, int(round(resolution * scale)))
         return r - (r % 2)
 
     def _upsample_to(self, x: torch.Tensor, resolution: int) -> torch.Tensor:
         if x.shape[2] == resolution and x.shape[3] == resolution:
             return x
+        if self.quality_lock and (x.shape[2] != resolution or x.shape[3] != resolution):
+            raise RuntimeError("quality_lock: 禁止上采样补分辨率")
         b, nv, h, w, c = x.shape
         flat = x.reshape(b * nv, h, w, c).permute(0, 3, 1, 2)
         flat = F.interpolate(
@@ -148,14 +212,62 @@ class PrunedIndirectPipeline:
         tex = self._texture_for_fingerprint(texture)
         return scene_fingerprint(triangles, tex, vn, mask)
 
-    def _need_refresh(self, scene_key: str, force: bool) -> Tuple[bool, str]:
-        if force or self._i_buffer is None:
+    def _need_refresh(
+        self,
+        scene_key: str,
+        force: bool,
+        c2w: torch.Tensor,
+    ) -> Tuple[bool, str]:
+        if force or self._i_buffer is None or self._fused_buffer is None:
             return True, "force_or_empty"
         if scene_key != self._last_scene_key:
             return True, "scene_change"
+        if self._guard_left > 0:
+            return True, "post_change_guard"
+        if self._c2w_buffer is not None:
+            rot = camera_rotation_deg(self._c2w_buffer, c2w)
+            if rot >= self.max_camera_rot_deg:
+                return True, "camera_motion"
         if self._frame_idx % self.refresh_every == 0:
             return True, "interval"
         return False, "skip"
+
+    def _run_depth(
+        self,
+        triangles,
+        texture,
+        vn,
+        mask,
+        c2w,
+        fov,
+        resolution: int,
+    ) -> Tuple[torch.Tensor, float]:
+        t0 = time.perf_counter()
+        if self.depth_mode == "analytic":
+            depth = analytic_plane_depth(c2w, fov, resolution)
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            ms = (time.perf_counter() - t0) * 1000.0
+            return depth.float(), ms
+
+        # 辅助深度可低于输出分辨率（只服务重投影，不降彩色输出分辨率）
+        d_res = max(64, int(round(resolution * self.depth_aux_scale)))
+        d_res = d_res - (d_res % 2)
+        _hdr, depth = self.direct_renderer.render(
+            triangles, texture, vn, mask, c2w, fov, d_res, depth_only=True
+        )
+        depth = depth.float()
+        if d_res != resolution:
+            # 深度用 nearest，保边缘，避免锯齿被双线性抹糊后再错切
+            b, nv, dh, dw, _ = depth.shape
+            flat = depth.reshape(b * nv, 1, dh, dw)
+            flat = F.interpolate(flat, size=(resolution, resolution), mode="nearest")
+            depth = flat.permute(0, 2, 3, 1).reshape(b, nv, resolution, resolution, 1)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+        ms = (time.perf_counter() - t0) * 1000.0
+        self.stats["direct_calls"] += 1
+        return depth, ms
 
     def _run_direct(
         self,
@@ -249,86 +361,132 @@ class PrunedIndirectPipeline:
         torch_dtype: torch.dtype,
         meta: Dict[str, Any],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # 质量路径：全分辨率 RF；Direct 按 mode；stub 另采 depth_only 供重投影
+        hdr_n, rf_info, rf_ms = self._run_neural(
+            triangles, texture, mask, vn, c2w, fov, resolution, torch_dtype
+        )
+        meta["rf_ms"] = rf_ms
+        meta["vi_cache_hit"] = rf_info.get("vi_cache_hit", False)
+        meta["neural_resolution"] = rf_info.get("neural_resolution")
+        meta["parallel_refresh"] = False
+        hdr_n = self._upsample_to(hdr_n, resolution)
+
         if self.direct_mode == "stub":
-            hdr_n, rf_info, rf_ms = self._run_neural(
-                triangles, texture, mask, vn, c2w, fov, resolution, torch_dtype
+            depth, z_ms = self._run_depth(
+                triangles, texture, vn, mask, c2w, fov, resolution
             )
-            meta["rf_ms"] = rf_ms
             meta["direct_ms"] = 0.0
-            meta["vi_cache_hit"] = rf_info.get("vi_cache_hit", False)
-            meta["neural_resolution"] = rf_info.get("neural_resolution")
-            meta["parallel_refresh"] = False
-            hdr_n = self._upsample_to(hdr_n, resolution)
+            meta["depth_ms"] = z_ms
+            meta["stub_direct"] = True
             hdr_d = torch.zeros_like(hdr_n)
-            depth = torch.zeros(
-                *hdr_n.shape[:-1], 1, device=hdr_n.device, dtype=hdr_n.dtype
-            )
             return hdr_d, depth, hdr_n
 
-        use_parallel = self.parallel_refresh and self.device.type == "cuda"
-        if not use_parallel:
-            hdr_d, depth, d_ms = self._run_direct(
-                triangles, texture, vn, mask, c2w, fov, resolution, resolution
-            )
-            hdr_n, rf_info, rf_ms = self._run_neural(
-                triangles, texture, mask, vn, c2w, fov, resolution, torch_dtype
-            )
-            meta["direct_ms"] = d_ms
-            meta["rf_ms"] = rf_ms
-            meta["vi_cache_hit"] = rf_info.get("vi_cache_hit", False)
-            meta["neural_resolution"] = rf_info.get("neural_resolution")
-            meta["parallel_refresh"] = False
-            meta["direct_resolution"] = self._scaled_res(resolution, self.direct_res_scale)
-            return hdr_d, depth, hdr_n
-
-        s_direct = torch.cuda.Stream()
-        s_rf = torch.cuda.Stream()
-        holder: Dict[str, Any] = {}
-        t0 = time.perf_counter()
-
-        with torch.cuda.stream(s_direct):
-            d_res = self._scaled_res(resolution, self.direct_res_scale)
-            hdr_d_raw, depth_raw = self.direct_renderer.render(
-                triangles, texture, vn, mask, c2w, fov, d_res
-            )
-            holder["d"] = hdr_d_raw
-            holder["z"] = depth_raw
-            self.stats["direct_calls"] += 1
-
-        with torch.cuda.stream(s_rf):
-            neural_res = self._scaled_res(resolution, self.neural_res_scale)
-            hdr_n_raw, rf_info = self.rf_pipeline.render(
-                triangles=triangles,
-                texture=texture,
-                mask=mask,
-                vn=vn,
-                c2w=c2w,
-                fov=fov,
-                resolution=neural_res,
-                torch_dtype=torch_dtype,
-                vi_cache=self.vi_cache,
-                return_vi_cache_info=True,
-            )
-            holder["n"] = hdr_n_raw
-            holder["info"] = rf_info
-            self.stats["rf_calls"] += 1
-
-        torch.cuda.current_stream().wait_stream(s_direct)
-        torch.cuda.current_stream().wait_stream(s_rf)
-        torch.cuda.synchronize()
-        wall = (time.perf_counter() - t0) * 1000.0
-
-        hdr_d = self._upsample_to(holder["d"].float(), resolution)
-        depth = self._upsample_to(holder["z"].float(), resolution)
-        hdr_n = holder["n"].float()
-        meta["direct_ms"] = wall
-        meta["rf_ms"] = wall
-        meta["wall_ms_parallel"] = wall
-        meta["parallel_refresh"] = True
-        meta["vi_cache_hit"] = bool(holder["info"].get("vi_cache_hit", False))
-        meta["neural_resolution"] = self._scaled_res(resolution, self.neural_res_scale)
+        hdr_d, depth, d_ms = self._run_direct(
+            triangles, texture, vn, mask, c2w, fov, resolution, resolution
+        )
+        meta["direct_ms"] = d_ms
         meta["direct_resolution"] = self._scaled_res(resolution, self.direct_res_scale)
         return hdr_d, depth, hdr_n
+
+    def _skip_reproject(
+        self,
+        c2w: torch.Tensor,
+        fov: torch.Tensor,
+        meta: Dict[str, Any],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
+        """返回 fused, direct, indirect, need_refresh_retry。"""
+        assert self._fused_buffer is not None
+        assert self._depth_buffer is not None
+        assert self._c2w_buffer is not None
+        assert self._fov_buffer is not None
+        assert self._i_buffer is not None
+        assert self._d_buffer is not None
+
+        t0 = time.perf_counter()
+        # 用刷新帧几何深度 warp 到当前相机，再反向双线性采色 → 避免平面近似错切锯齿
+        if self.depth_mode == "raycast":
+            depth_dst = warp_depth_forward(
+                self._depth_buffer,
+                self._c2w_buffer,
+                self._fov_buffer,
+                c2w,
+                fov,
+            )
+            # 深度已由同一几何 warp，关闭苛刻遮挡测试以免大片误判成洞 → 填洞锯齿
+            z_tol = -1.0
+        else:
+            depth_dst = analytic_plane_depth(c2w, fov, self._fused_buffer.shape[2])
+            z_tol = -1.0
+        if self.reproject_mode == "inverse":
+            fused, _valid, hole = reproject_inverse_bilinear(
+                self._fused_buffer,
+                self._depth_buffer,
+                self._c2w_buffer,
+                self._fov_buffer,
+                c2w,
+                fov,
+                depth_dst,
+                z_rel_tol=z_tol,
+            )
+        else:
+            fused, _valid, hole = reproject_by_depth(
+                self._fused_buffer,
+                self._depth_buffer,
+                self._c2w_buffer,
+                self._fov_buffer,
+                c2w,
+                fov,
+            )
+        if self.direct_mode == "stub":
+            hdr_d = torch.zeros_like(fused)
+            indirect = fused
+        else:
+            if self.reproject_mode == "inverse":
+                indirect, _, _ = reproject_inverse_bilinear(
+                    self._i_buffer,
+                    self._depth_buffer,
+                    self._c2w_buffer,
+                    self._fov_buffer,
+                    c2w,
+                    fov,
+                    depth_dst,
+                    z_rel_tol=z_tol,
+                )
+                hdr_d, _, _ = reproject_inverse_bilinear(
+                    self._d_buffer,
+                    self._depth_buffer,
+                    self._c2w_buffer,
+                    self._fov_buffer,
+                    c2w,
+                    fov,
+                    depth_dst,
+                    z_rel_tol=z_tol,
+                )
+            else:
+                indirect, _, _ = reproject_by_depth(
+                    self._i_buffer,
+                    self._depth_buffer,
+                    self._c2w_buffer,
+                    self._fov_buffer,
+                    c2w,
+                    fov,
+                )
+                hdr_d, _, _ = reproject_by_depth(
+                    self._d_buffer,
+                    self._depth_buffer,
+                    self._c2w_buffer,
+                    self._fov_buffer,
+                    c2w,
+                    fov,
+                )
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+        meta["reproject_ms"] = (time.perf_counter() - t0) * 1000.0
+        meta["hole_ratio"] = hole
+        meta["reproject_mode"] = self.reproject_mode
+        self.stats["reprojects"] += 1
+        need_retry = hole > self.max_hole_ratio
+        return fused, hdr_d, indirect, need_retry
 
     @torch.no_grad()
     def render(
@@ -344,15 +502,38 @@ class PrunedIndirectPipeline:
         scene_key: Optional[str] = None,
         force_refresh: bool = False,
     ) -> PrunedFrameResult:
-        meta: Dict[str, Any] = {}
+        meta: Dict[str, Any] = {
+            "quality_lock": self.quality_lock,
+            "view_follow": self.view_follow,
+        }
         t_all = time.perf_counter()
         self.stats["frames"] += 1
 
         key = self._scene_key(triangles, texture, vn, mask, scene_key)
-        refreshed, reason = self._need_refresh(key, force_refresh)
+        refreshed, reason = self._need_refresh(key, force_refresh, c2w)
         meta["refresh_reason"] = reason
         meta["scene_key"] = key[:16]
         meta["frame_idx"] = self._frame_idx
+
+        if not refreshed and self.view_follow == "reproject":
+            fused, hdr_d, indirect, retry = self._skip_reproject(c2w, fov, meta)
+            if retry:
+                refreshed, reason = True, "hole_ratio"
+                meta["refresh_reason"] = reason
+            else:
+                self.stats["skips"] += 1
+                meta["rf_invoked"] = False
+                meta["direct_ms"] = meta.get("reproject_ms", 0.0)
+                meta["total_ms"] = (time.perf_counter() - t_all) * 1000.0
+                meta["refreshed"] = False
+                self._frame_idx += 1
+                return PrunedFrameResult(
+                    hdr_fused=fused,
+                    hdr_direct=hdr_d,
+                    indirect=indirect,
+                    refreshed=False,
+                    meta=meta,
+                )
 
         if refreshed:
             self.stats["refreshes"] += 1
@@ -364,6 +545,7 @@ class PrunedIndirectPipeline:
                 indirect = hdr_n
                 meta["indirect_ms"] = 0.0
                 meta["stub_direct"] = True
+                hdr_fused = hdr_n
             else:
                 if self.auto_align_direct:
                     n = self._match_res(hdr_n, hdr_d)
@@ -375,36 +557,63 @@ class PrunedIndirectPipeline:
                 t_i = time.perf_counter()
                 indirect = self._estimate_indirect(hdr_d, hdr_n, depth)
                 meta["indirect_ms"] = (time.perf_counter() - t_i) * 1000.0
+                hdr_fused = fuse_direct_indirect(hdr_d, indirect, self.alpha)
 
             self._i_buffer = indirect
             self._d_buffer = hdr_d
+            self._fused_buffer = hdr_fused
             self._depth_buffer = depth
+            self._c2w_buffer = c2w.detach().clone()
+            self._fov_buffer = fov.detach().clone()
+            if reason == "scene_change":
+                self._guard_left = self.guard_refreshes_after_scene_change
+            elif reason == "post_change_guard" and self._guard_left > 0:
+                self._guard_left -= 1
             self._last_scene_key = key
             meta["rf_invoked"] = True
+            meta["guard_left"] = self._guard_left
         else:
             self.stats["skips"] += 1
             meta["rf_invoked"] = False
             meta["vi_cache_hit"] = None
 
-            if self.direct_mode == "always":
+            if self.view_follow == "direct_plus_i" or self.direct_mode == "always":
                 hdr_d, depth, d_ms = self._run_direct(
                     triangles, texture, vn, mask, c2w, fov, resolution, resolution
                 )
                 meta["direct_ms"] = d_ms
                 self._d_buffer = hdr_d
                 self._depth_buffer = depth
+                if self.view_follow == "direct_plus_i" and self._i_buffer is not None and self._c2w_buffer is not None:
+                    indirect, _, hole = reproject_by_depth(
+                        self._i_buffer,
+                        self._depth_buffer if self._depth_buffer is not None else depth,
+                        self._c2w_buffer,
+                        self._fov_buffer,
+                        c2w,
+                        fov,
+                    )
+                    meta["hole_ratio"] = hole
+                    self.stats["reprojects"] += 1
+                else:
+                    indirect = self._i_buffer
             else:
                 assert self._d_buffer is not None and self._i_buffer is not None
                 hdr_d = self._d_buffer
                 meta["direct_ms"] = 0.0
                 meta["direct_reused"] = True
+                indirect = self._i_buffer
 
-            indirect = self._i_buffer
             assert indirect is not None
             if indirect.shape[2:4] != hdr_d.shape[2:4]:
+                if self.quality_lock:
+                    raise RuntimeError("quality_lock: I/D 分辨率不一致")
                 indirect = self._match_res(indirect, hdr_d)
+            hdr_fused = fuse_direct_indirect(hdr_d, indirect, self.alpha)
+            self._fused_buffer = hdr_fused
+            self._c2w_buffer = c2w.detach().clone()
+            self._fov_buffer = fov.detach().clone()
 
-        hdr_fused = fuse_direct_indirect(hdr_d, indirect, self.alpha)
         meta["total_ms"] = (time.perf_counter() - t_all) * 1000.0
         meta["refreshed"] = refreshed
         meta["refresh_every"] = self.refresh_every

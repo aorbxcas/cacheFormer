@@ -44,22 +44,27 @@ class RuntimeDirectRendererLite:
         c2w: torch.Tensor,
         fov: torch.Tensor,
         resolution: int = 512,
+        depth_only: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
-            hdr_direct: [B, nv, H, W, 3] linear HDR
+            hdr_direct: [B, nv, H, W, 3] linear HDR（depth_only 时为 0）
             depth: [B, nv, H, W, 1] 沿视线到命中点的距离
         """
         mesh = MeshBuffer.from_scene_tensors(triangles, vn, texture, mask)
-        lights = extract_emissive_lights(
-            mesh, min_emissive=self.min_emissive, scene_center=self.scene_center.to(triangles.device)
+        lights = (
+            []
+            if depth_only
+            else extract_emissive_lights(
+                mesh, min_emissive=self.min_emissive, scene_center=self.scene_center.to(triangles.device)
+            )
         )
 
         bs, nv = c2w.shape[0], c2w.shape[1]
         if fov.dim() == 2:
             fov = fov.unsqueeze(-1)
 
-        shadow_tris = mesh.triangles[mesh.shadow_caster_mask]
+        shadow_tris = mesh.triangles[mesh.shadow_caster_mask] if not depth_only else mesh.triangles[:0]
         primary_tris = mesh.triangles[mesh.mask]
 
         hdr_views = []
@@ -74,6 +79,7 @@ class RuntimeDirectRendererLite:
                     c2w=c2w[b, v],
                     fov=fov[b, v],
                     resolution=resolution,
+                    depth_only=depth_only,
                 )
                 hdr_views.append(hdr)
                 depth_views.append(depth)
@@ -91,6 +97,7 @@ class RuntimeDirectRendererLite:
         c2w: torch.Tensor,
         fov: torch.Tensor,
         resolution: int,
+        depth_only: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         device = c2w.device
         dtype = c2w.dtype
@@ -124,6 +131,12 @@ class RuntimeDirectRendererLite:
                 torch.full_like(tri_chunk, -1),
             )
 
+        depth = hit_t.reshape(resolution, resolution, 1)
+        depth = torch.where(torch.isfinite(depth), depth, torch.zeros_like(depth))
+        if depth_only:
+            hdr = torch.zeros(resolution, resolution, 3, device=device, dtype=dtype)
+            return hdr, depth
+
         hdr = torch.zeros(num_pixels, 3, device=device, dtype=dtype)
         valid = hit_tri >= 0
         if valid.any():
@@ -137,8 +150,6 @@ class RuntimeDirectRendererLite:
                 rays_d=rays_d_flat[valid],
             )
 
-        depth = hit_t.reshape(resolution, resolution, 1)
-        depth = torch.where(torch.isfinite(depth), depth, torch.zeros_like(depth))
         hdr = hdr.reshape(resolution, resolution, 3)
         return hdr, depth
 

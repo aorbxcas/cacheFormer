@@ -51,6 +51,7 @@ class NvdiffrastDirectRenderer:
         c2w: torch.Tensor,
         fov: torch.Tensor,
         resolution: int = 512,
+        depth_only: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         mesh = MeshBuffer.from_scene_tensors(triangles, vn, texture, mask)
         flat = FlatMeshGPU.from_mesh_buffer(mesh)
@@ -76,6 +77,8 @@ class NvdiffrastDirectRenderer:
                     fov_deg=fov[b, v, 0],
                     resolution=resolution,
                 )
+                if depth_only:
+                    hdr = torch.zeros_like(hdr)
                 hdr_views.append(hdr)
                 depth_views.append(depth)
 

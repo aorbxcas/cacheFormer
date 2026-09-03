@@ -1,0 +1,255 @@
+{
+  "scene": "veach-mis",
+  "dynamic": "irradiance_orbit",
+  "h5": "tmp/c1_scenes/veach-mis.h5",
+  "cacheformer": {
+    "mean_ms": 280.7556916656419,
+    "fps": 3.561815591581744,
+    "rf_calls": 12,
+    "cache_hits": 8,
+    "frames": [
+      {
+        "frame": 1,
+        "name": "f01_irr0.5",
+        "scene_key": "irr_0.5",
+        "elapsed_ms": 411.5538999903947,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 2,
+        "name": "f02_irr0.5",
+        "scene_key": "irr_0.5",
+        "elapsed_ms": 211.9998999987729,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 3,
+        "name": "f03_irr0.5",
+        "scene_key": "irr_0.5",
+        "elapsed_ms": 205.04600000276696,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 4,
+        "name": "f04_irr1.0",
+        "scene_key": "irr_1.0",
+        "elapsed_ms": 415.4731000016909,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 5,
+        "name": "f05_irr1.0",
+        "scene_key": "irr_1.0",
+        "elapsed_ms": 210.5359999986831,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 6,
+        "name": "f06_irr1.0",
+        "scene_key": "irr_1.0",
+        "elapsed_ms": 213.97309999156278,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 7,
+        "name": "f07_irr1.8",
+        "scene_key": "irr_1.8",
+        "elapsed_ms": 414.95069999655243,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 8,
+        "name": "f08_irr1.8",
+        "scene_key": "irr_1.8",
+        "elapsed_ms": 212.80320000369102,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 9,
+        "name": "f09_irr1.8",
+        "scene_key": "irr_1.8",
+        "elapsed_ms": 215.51210001052823,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 10,
+        "name": "f10_irr0.8",
+        "scene_key": "irr_0.8",
+        "elapsed_ms": 426.0677999991458,
+        "vi_cache_hit": false
+      },
+      {
+        "frame": 11,
+        "name": "f11_irr0.8",
+        "scene_key": "irr_0.8",
+        "elapsed_ms": 217.6733999949647,
+        "vi_cache_hit": true
+      },
+      {
+        "frame": 12,
+        "name": "f12_irr0.8",
+        "scene_key": "irr_0.8",
+        "elapsed_ms": 213.4790999989491,
+        "vi_cache_hit": true
+      }
+    ]
+  },
+  "pruned": {
+    "mean_ms": 145.76060000157062,
+    "fps": 6.860564514616602,
+    "rf_calls": 4,
+    "refreshes": 4,
+    "skips": 8,
+    "pipe_stats": {
+      "frames": 12,
+      "refreshes": 4,
+      "skips": 8,
+      "rf_calls": 4,
+      "direct_calls": 0,
+      "reprojects": 8
+    },
+    "frames": [
+      {
+        "frame": 1,
+        "name": "f01_irr0.5",
+        "scene_key": "irr_0.5",
+        "elapsed_ms": 424.9504000035813,
+        "refreshed": true,
+        "reason": "force_or_empty",
+        "hole_ratio": null
+      },
+      {
+        "frame": 2,
+        "name": "f02_irr0.5",
+        "scene_key": "irr_0.5",
+        "elapsed_ms": 5.136100007803179,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.047119140625
+      },
+      {
+        "frame": 3,
+        "name": "f03_irr0.5",
+        "scene_key": "irr_0.5",
+        "elapsed_ms": 4.904200002783909,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.082489013671875
+      },
+      {
+        "frame": 4,
+        "name": "f04_irr1.0",
+        "scene_key": "irr_1.0",
+        "elapsed_ms": 425.7413000013912,
+        "refreshed": true,
+        "reason": "scene_change",
+        "hole_ratio": null
+      },
+      {
+        "frame": 5,
+        "name": "f05_irr1.0",
+        "scene_key": "irr_1.0",
+        "elapsed_ms": 6.1950999952387065,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.047119140625
+      },
+      {
+        "frame": 6,
+        "name": "f06_irr1.0",
+        "scene_key": "irr_1.0",
+        "elapsed_ms": 6.058399987523444,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.082489013671875
+      },
+      {
+        "frame": 7,
+        "name": "f07_irr1.8",
+        "scene_key": "irr_1.8",
+        "elapsed_ms": 427.93150000215974,
+        "refreshed": true,
+        "reason": "scene_change",
+        "hole_ratio": null
+      },
+      {
+        "frame": 8,
+        "name": "f08_irr1.8",
+        "scene_key": "irr_1.8",
+        "elapsed_ms": 4.45600000966806,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.047119140625
+      },
+      {
+        "frame": 9,
+        "name": "f09_irr1.8",
+        "scene_key": "irr_1.8",
+        "elapsed_ms": 9.583400009432808,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.082489013671875
+      },
+      {
+        "frame": 10,
+        "name": "f10_irr0.8",
+        "scene_key": "irr_0.8",
+        "elapsed_ms": 425.1832000009017,
+        "refreshed": true,
+        "reason": "scene_change",
+        "hole_ratio": null
+      },
+      {
+        "frame": 11,
+        "name": "f11_irr0.8",
+        "scene_key": "irr_0.8",
+        "elapsed_ms": 4.513099993346259,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.047119140625
+      },
+      {
+        "frame": 12,
+        "name": "f12_irr0.8",
+        "scene_key": "irr_0.8",
+        "elapsed_ms": 4.474500005017035,
+        "refreshed": false,
+        "reason": "skip",
+        "hole_ratio": 0.082489013671875
+      }
+    ]
+  },
+  "speedup_vs_cf": 1.926142535517943,
+  "mean_abs_l1_vs_cf": 0.00343202130170539,
+  "mean_psnr_vs_cf": 51.36610044561342,
+  "per_frame_abs_l1": [
+    0.0,
+    0.0031276384834200144,
+    0.0036734575405716896,
+    0.0,
+    0.0059456899762153625,
+    0.006463667843490839,
+    0.0,
+    0.0058257095515728,
+    0.0058861481957137585,
+    0.0,
+    0.004822979215532541,
+    0.005438964813947678
+  ],
+  "per_frame_psnr": [
+    99.0,
+    28.20246609917127,
+    26.497548575007997,
+    99.0,
+    28.20700689705053,
+    27.398596974005738,
+    99.0,
+    25.99384657831721,
+    26.15908879309322,
+    99.0,
+    29.269943655826246,
+    28.66470777488866
+  ],
+  "pass_speed": true,
+  "pass_quality_soft": true
+}
