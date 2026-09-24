@@ -121,15 +121,23 @@ def _apply_texture(base: torch.Tensor, plan: FramePlan) -> torch.Tensor:
     return tex
 
 
-def build_dynamic_plans(kind: str, num_frames: int) -> List[FramePlan]:
+def build_dynamic_plans(
+    kind: str,
+    num_frames: int,
+    *,
+    orbit_span_deg: float = 60.0,
+    fov_crop: float = 1.0,
+) -> List[FramePlan]:
     plans: List[FramePlan] = []
     rough_seq = [0.15, 0.45, 0.75, 0.95]
     spec_seq = [0.4, 1.0, 1.6, 0.7]
     irr_seq = [0.5, 1.0, 1.8, 0.8]
+    half = float(orbit_span_deg) * 0.5
+    crop = float(fov_crop)
 
     for i in range(num_frames):
         t = i / max(num_frames - 1, 1)
-        orbit = -30.0 + 60.0 * t
+        orbit = -half + float(orbit_span_deg) * t
         if kind == "orbit_only":
             plans.append(
                 FramePlan(
@@ -207,6 +215,7 @@ def build_dynamic_plans(kind: str, num_frames: int) -> List[FramePlan]:
             )
         else:
             raise ValueError(f"unknown dynamic kind: {kind}")
+        plans[-1].fov_scale = float(plans[-1].fov_scale) * crop
     return plans
 
 

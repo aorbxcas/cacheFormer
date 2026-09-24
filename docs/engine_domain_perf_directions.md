@@ -1,8 +1,9 @@
 # 游戏引擎领域：性能优化方向
 
-> **版本**：1.0  
-> **状态**：设计落档，待选型实现  
-> **关联**：[`C1_residual_indirect_head.md`](./C1_residual_indirect_head.md)、[`scheme4_hybrid_gi_plan.md`](./scheme4_hybrid_gi_plan.md)、[`project_c_quality_controlled_neural_gi.md`](./project_c_quality_controlled_neural_gi.md)、[`实验记录_同场景VI缓存.md`](./实验记录_同场景VI缓存.md)  
+> **版本**：1.1  
+> **状态**：设计落档；与三层栈 Layered L1–L3、C1 调度思想对齐  
+> **项目总览**：[`docs/README.md`](./README.md)  
+> **关联**：[`C1_residual_indirect_head.md`](./C1_residual_indirect_head.md)、[`layered_indirect_three_layer.md`](./layered_indirect_three_layer.md)、[`scheme4_hybrid_gi_plan.md`](./scheme4_hybrid_gi_plan.md)、[`project_c_quality_controlled_neural_gi.md`](./project_c_quality_controlled_neural_gi.md)、[`实验记录_同场景VI缓存.md`](./实验记录_同场景VI缓存.md)  
 > **定位**：若将 CacheFormer 应用于游戏引擎（编辑器预览 / 运行时近似 GI 插件），相对通用推理加速，还有哪些**该领域特有**的性能优化方向。
 
 ---
@@ -59,7 +60,8 @@
 | **异步 compute 队列** | 现同步 Python 管线 | Direct 在渲染线程；RF/小头进 async；合成永远用上一帧就绪结果 |
 | **时间切片 VI/VD** | 一帧算不完整段 Transformer | 多帧摊销：帧 0 编码，帧 1 半层 VI，帧 2 VD… |
 
-与 C1「Direct 跟玩法、Indirect 可降频」一致；相对现状属 **P0**。
+与 C1「Direct 跟玩法、Indirect 可降频」一致；相对现状属 **P0**。  
+仓库内已落地的调度原型：**Layered L1–L3**（隔帧 RF + warp I/fused），见 [`layered_indirect_three_layer.md`](./layered_indirect_three_layer.md)。进引擎时再叠异步队列与 dirty 事件。
 
 ---
 

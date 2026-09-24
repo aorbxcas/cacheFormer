@@ -2,8 +2,10 @@
 
 > **版本**：2.0（路径 B 为主路线）  
 > **状态**：计划已落档；代码模块按里程碑逐步实现。  
+> **项目总览**：[`docs/README.md`](./README.md)  
 > **关联仓库**：`cacheFormer`（基于 RenderFormer 推理管线扩展）。  
 > **配套阅读**：[相关论文解析与下载索引](./scheme4_paper_reading_guide.md)  
+> **后续演进**：[C1 残差间接头](./C1_residual_indirect_head.md)、[三层性能栈](./layered_indirect_three_layer.md)  
 > **关联设计**：[项目 C — 质量可控的神经 GI](./project_c_quality_controlled_neural_gi.md)（模块 5 为 confidence 输入源）
 
 ---

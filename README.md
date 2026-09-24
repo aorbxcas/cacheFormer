@@ -41,6 +41,7 @@ RenderFormer is a neural rendering pipeline that directly renders an image from 
 
 # Table of Content
 
+- [CacheFormer 扩展文档](#cacheformer-扩展文档)
 - [Installation](#installation)
   * [Prerequisites](#prerequisites)
   * [Environment Setup](#environment-setup)
@@ -69,6 +70,26 @@ RenderFormer is a neural rendering pipeline that directly renders an image from 
 - [Acknowledgements](#acknowledgements)
 - [License](#license)
 - [Citation](#citation)
+
+# CacheFormer 扩展文档
+
+本仓库在官方 RenderFormer 之上先做 **Direct/Indirect 语义分离**（Hybrid + C1），再引入 VI Cache、隔帧填充、warp 等——**效率是分离后的结果**。文档入口：
+
+| 文档 | 说明 |
+|------|------|
+| **[docs/README.md](docs/README.md)** | **总览**：语义主线 → 允许的技术 → 效率结果 |
+| [docs/talk_script_pipeline.md](docs/talk_script_pipeline.md) | **讲解稿**：语义分离因果链（口述/答辩） |
+| [docs/C1_residual_indirect_head.md](docs/C1_residual_indirect_head.md) | C1：间接可学习（语义） |
+| [docs/scheme4_hybrid_gi_plan.md](docs/scheme4_hybrid_gi_plan.md) | Hybrid：\(L=D+\alpha\cdot I\) 合成合同 |
+| [docs/layered_indirect_three_layer.md](docs/layered_indirect_three_layer.md) | 分离后的 L1–L3 调度与 vs CF/RF 实测 |
+| [docs/engine_domain_perf_directions.md](docs/engine_domain_perf_directions.md) | 进引擎的性能方向 |
+
+```bash
+python tools/benchmark_layered_vs_cf.py --h5_file tmp/cbox/cbox.h5 \
+  --pipelines renderformer,cacheformer,layered
+```
+
+以下为上游 RenderFormer 安装与用法说明。
 
 # Installation
 

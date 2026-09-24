@@ -2,7 +2,8 @@
 
 > 版本：1.0  
 > 状态：设计已落档；具体代码模块可按里程碑逐步实现。  
-> 关联仓库：`cacheFormer`（基于 RenderFormer 推理管线扩展）。
+> 关联仓库：`cacheFormer`（基于 RenderFormer 推理管线扩展）。  
+> **项目总览**：[docs/README.md](./README.md) · Hybrid 主计划：[scheme4](./scheme4_hybrid_gi_plan.md) · 性能栈：[layered](./layered_indirect_three_layer.md)
 
 ---
 

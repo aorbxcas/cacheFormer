@@ -1,9 +1,36 @@
 # C1 路线：冻结 RenderFormer + 残差间接光头
 
-> **版本**：1.3  
-> **状态**：P0–P2 **质量锁定路径**：全分辨率 RF 刷新 + 重投影跟视图；动态序列约 **1.7× CF**、absL1≈0.006  
-> **关联**：[`scheme4_hybrid_gi_plan.md`](./scheme4_hybrid_gi_plan.md)、[`project_c_quality_controlled_neural_gi.md`](./project_c_quality_controlled_neural_gi.md)、[`实验记录_同场景VI缓存.md`](./实验记录_同场景VI缓存.md)、[`engine_domain_perf_directions.md`](./engine_domain_perf_directions.md)  
+> **版本**：1.4  
+> **状态**：P0–P2 质量锁定路径已达成；**性能主验收**已交给三层栈 Layered L1–L3（见下）  
+> **项目总览**：[`docs/README.md`](./README.md)（文档地图与管线层次）  
+> **关联**：[`layered_indirect_three_layer.md`](./layered_indirect_three_layer.md)、[`scheme4_hybrid_gi_plan.md`](./scheme4_hybrid_gi_plan.md)、[`project_c_quality_controlled_neural_gi.md`](./project_c_quality_controlled_neural_gi.md)、[`实验记录_同场景VI缓存.md`](./实验记录_同场景VI缓存.md)、[`engine_domain_perf_directions.md`](./engine_domain_perf_directions.md)  
 > **定位**：在「不从零训练大模型」的前提下，让 **Direct / Indirect 在语义上真正分开**，并继续沿用 CacheFormer 的缓存与调度思想。
+
+---
+
+## 与三层栈 / 全项目的关系（必读）
+
+| 层级 | 文档 | C1 在其中的角色 |
+|------|------|-----------------|
+| CacheFormer | VI Cache | 基础设施；C1 推理可挂 `--vi_cache` |
+| Hybrid / 方案四 | scheme4 | C1 的 \(I_{\mathrm{pred}}\) 可替换 `clamp(N−D,0)` 进 α 融合 |
+| **Layered L1–L3** | [layered](./layered_indirect_three_layer.md) | **调度加速主路径**；L2 可 `mix_residual_head`，**未训练头默认关闭** |
+| 引擎方向 | engine_domain | C1 = 异步填充 `I_buffer` 的学习器 |
+
+**正交原则**（与三层栈文档一致）：
+
+- **跳过 RF 的判定**只看指纹 / 转角 / interval / 空洞——**不是** Direct，也**不是**残差头。  
+- 残差头解决「间接是否可学、语义是否干净」；三层栈解决「少跑几次 Transformer」。  
+- 对标 CacheFormer 质量时：`quality_anchor=rf`，`l2_head_mix=0`；头训好后再开 mix / hybrid。
+
+当前推荐基准（含 vs 纯 RF）：
+
+```bash
+python tools/benchmark_layered_vs_cf.py --h5_file tmp/cbox/cbox.h5 \
+  --pipelines renderformer,cacheformer,layered
+```
+
+细节与实测表见 [`layered_indirect_three_layer.md`](./layered_indirect_three_layer.md)。
 
 ---
 
@@ -11,6 +38,8 @@
 
 | 模块 | 路径 |
 |------|------|
+| **三层性能栈** | `renderformer/c1/layered_pipeline.py`、`skip_fast_term.py` |
+| 剪枝基类 / 重投影 | `pruned_pipeline.py`、`reproject.py` |
 | 残差头 | `renderformer/c1/residual_head.py` |
 | 损失 / Dataset / 推理管线 | `renderformer/c1/losses.py` / `dataset.py` / `pipeline.py` |
 | 数据准备 | `tools/c1_prepare_dataset.py` |
@@ -371,35 +400,39 @@ python tools/benchmark_pruned_l0_l1.py --h5_file tmp/c1_scenes/cbox.h5 \
 
 后续：nvdiffrast 真 Direct 接 `always`；本阶段验收以「全分辨率 + 超 CF + absL1 小」为准。
 
-### M3 剪枝实现（L0 / L1）
+### M3 剪枝实现（L0 / L1）→ 已演进为 Layered L1–L3
 
 | 层级 | 代码 | 行为 |
 |------|------|------|
-| **L0 调度剪枝** | `renderformer/c1/pruned_pipeline.py` | 换场景 / 每 N 帧才跑 RF；其余帧 **不调用** Transformer，复用 `I_buffer` |
-| **L1 刷新降本** | 同上 `neural_res_scale` / `direct_res_scale` | 刷新半分辨率 RF；每帧低分 lite Direct |
-| **Benchmark** | `tools/benchmark_pruned_l0_l1.py` | 动态 roughness 序列 vs CacheFormer |
+| **L0 调度剪枝** | `renderformer/c1/pruned_pipeline.py` | 换场景 / 每 N 帧才跑 RF；其余帧复用缓冲 |
+| **L1 跟视图** | `reproject.py` + pruned | 全分辨率 inverse reproject（质量锁定禁止半分辨率凑速度） |
+| **Layered L1–L3** | `layered_pipeline.py` + `skip_fast_term.py` | **现行性能主路径**：adaptive 刷新 + warp + 可选 L2 |
+| **Benchmark** | `tools/benchmark_layered_vs_cf.py` | 动态序列 vs CF / RF；闸门 speedup>1 且 absL1&lt;0.08 |
 
 ```bash
-# 动态场景：L0/L1 + 低分 Direct(每帧) + 半分辨率 RF(刷新)，串行（默认）
+# 现行主验收
+python tools/benchmark_layered_vs_cf.py --h5_file tmp/cbox/cbox.h5 \
+  --pipelines renderformer,cacheformer,layered
+```
+
+历史消融（半分辨率 / L0L1）仍可用 `tools/benchmark_pruned_l0_l1.py`，**不得作为质量锁定主验收**。详见 [`layered_indirect_three_layer.md`](./layered_indirect_three_layer.md)。
+
+<details>
+<summary>历史 L0/L1 消融命令与数字（备查）</summary>
+
+```bash
 python tools/benchmark_pruned_l0_l1.py --h5_file tmp/c1_scenes/cbox.h5 \
   --refresh_every 3 --neural_res_scale 0.5 --direct_res_scale 0.25 --direct_mode always
 ```
 
-- `direct_mode=always` + `direct_res_scale=0.25`：每帧跟相机的 Direct（lite@64）  
-- `parallel_refresh`：**默认关**；lite Direct + RF 多流实测会严重退化  
-- `stub`：神经侧消融上限（跳过帧 ~0 成本）
-
-**动态序列实测**（cbox，12 帧，每 3 帧改 roughness，256²，`out/compare_pruned_l0_l1_fast_direct_seq2`）：
-
 | 配置 | mean ms | vs CacheFormer | RF 调用 |
 |------|---------|----------------|---------|
 | CacheFormer (RF+VI 每帧) | ~331 | 1× | 12 |
-| L0/L1 always Direct@64 + RF@128 刷新 | **~188** | **1.76×** | 4 |
-| 同配置 Direct@32 | ~190 | 1.74× | 4 |
+| L0/L1 always Direct@64 + RF@128 刷新 | ~188 | 1.76× | 4 |
 | stub（无 Direct，神经上限） | ~135 | 2.45× | 4 |
 | 并行 refresh（已弃用默认） | ~980 | 0.34× | 4 |
 
-跳过帧约 **50 ms**（仅 Direct）；刷新帧约 **450 ms**（Direct + RF@128）。瓶颈已从 RF 转移到 lite Direct；真光栅 Direct 后跳过帧有望进一步逼近 stub。
+</details>
 
 | M4 | C1-b 或静动分缓存 PoC | 静物 hit、动物更新的统计 | 待做 |
 | M5（可选） | 引擎插件原型（Unity/Unreal 其一） | 编辑器内跟手预览 | 待做 |
